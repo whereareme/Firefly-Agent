@@ -10,10 +10,11 @@ from pathlib import Path
 from typing import Any
 
 from PySide6.QtCore import QPoint, QSize, Qt, QThread, QTimer, QUrl, Signal, Slot
-from PySide6.QtGui import QCloseEvent, QDesktopServices, QDragEnterEvent, QDropEvent, QIcon, QKeyEvent, QMouseEvent, QPixmap
+from PySide6.QtGui import QColor, QCloseEvent, QDesktopServices, QDragEnterEvent, QDropEvent, QIcon, QKeyEvent, QMouseEvent, QPainter, QPixmap
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
+    QComboBox,
     QFileDialog,
     QFrame,
     QHBoxLayout,
@@ -36,7 +37,7 @@ from PySide6.QtWidgets import (
 )
 
 from firefly.desktop.chat_rendering import ChatBubble, format_chat_text, normalize_chat_text, render_chat_html
-from firefly.desktop.styles import chat_style_for_mode, chat_viewport_style_for_mode, resolved_theme_mode
+from firefly.desktop.styles import chat_style_for_mode, chat_viewport_style_for_mode, combo_popup_style, resolved_theme_mode
 from firefly.desktop.settings_panel import SettingsPanelMixin
 from firefly.desktop.upload_widgets import upload_preview_widget
 from firefly.desktop.workers import ChatWorker, live2d_mood_for_reply
@@ -230,6 +231,22 @@ class ChatInput(QTextEdit):
         super().dropEvent(event)
 
 
+class ModelSelector(QComboBox):
+    def paintEvent(self, event) -> None:
+        super().paintEvent(event)
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing, True)
+        painter.setPen(QColor("#08786f"))
+        x = self.width() - 14
+        y = self.height() // 2 - 2
+        painter.drawLine(QPoint(x - 4, y), QPoint(x, y + 4))
+        painter.drawLine(QPoint(x, y + 4), QPoint(x + 4, y))
+
+    def showPopup(self) -> None:
+        self.view().setStyleSheet(combo_popup_style(bool(self.window().property("darkTheme"))))
+        super().showPopup()
+
+
 class ChatWindow(SettingsPanelMixin, QMainWindow):
     approval_requested = Signal(object)
 
@@ -250,7 +267,7 @@ class ChatWindow(SettingsPanelMixin, QMainWindow):
         self._context_snapshotter: Any = None
         self.pending_uploads: list[Path] = []
         self._status_token = 0
-        self.nav_collapsed = False
+        self.nav_collapsed = True
         self.nav_expanded_width = 260
         self.resize_grip: QSizeGrip | None = None
         self.window_state_button: QPushButton | None = None
@@ -457,11 +474,16 @@ class ChatWindow(SettingsPanelMixin, QMainWindow):
         self.chat_nav_button.setVisible(self.nav_collapsed)
         self.conversation_heading.setVisible(not self.nav_collapsed)
         self.conversation_list.setVisible(not self.nav_collapsed)
-        width = 40 if self.nav_collapsed else max(180, self.nav_expanded_width - 20)
-        height = 42 if self.nav_collapsed else 44
         for button in (self.new_chat_nav_button, self.chat_nav_button, self.settings_nav_button):
             button.setIconSize(QSize(20, 20) if self.nav_collapsed else QSize(18, 18))
-            button.setFixedSize(width, height)
+            if self.nav_collapsed:
+                button.setFixedSize(40, 42)
+                self.nav_layout.setAlignment(button, Qt.AlignHCenter)
+            else:
+                button.setMinimumWidth(0)
+                button.setMaximumWidth(16777215)
+                button.setFixedHeight(44)
+                self.nav_layout.setAlignment(button, Qt.Alignment())
 
     def switch_page(self, index: int) -> None:
         self.main_stack.setCurrentIndex(index)
@@ -486,11 +508,14 @@ class ChatWindow(SettingsPanelMixin, QMainWindow):
         self.chat_title_label.setObjectName("chatHeaderTitle")
         self.chat_ready_label = QLabel("● 就绪", header)
         self.chat_ready_label.setObjectName("chatHeaderStatus")
-        self.chat_model_label = QLabel("", header)
-        self.chat_model_label.setObjectName("chatHeaderModel")
+        self.chat_model_selector = ModelSelector(header)
+        self.chat_model_selector.setObjectName("chatModelSelector")
+        self.chat_model_selector.setMinimumWidth(180)
+        self.chat_model_selector.setMaximumWidth(280)
+        self.chat_model_selector.currentTextChanged.connect(self.select_chat_model)
         header_layout.addWidget(self.chat_title_label)
         header_layout.addWidget(self.chat_ready_label)
-        header_layout.addWidget(self.chat_model_label)
+        header_layout.addWidget(self.chat_model_selector)
         header_layout.addStretch(1)
         layout.addWidget(header)
 
@@ -589,8 +614,8 @@ class ChatWindow(SettingsPanelMixin, QMainWindow):
             return
         conversation = self.conversations[self.current_conversation_index]
         self.chat_title_label.setText(conversation_title(conversation.get("title"), "对话"))
-        model = str(self.config.get("model") or "").strip() or "未选择模型"
-        self.chat_model_label.setText(model)
+        if hasattr(self, "refresh_chat_model_selector"):
+            self.refresh_chat_model_selector()
 
     def sync_context_button(self) -> None:
         if not hasattr(self, "context_button"):
@@ -702,6 +727,8 @@ class ChatWindow(SettingsPanelMixin, QMainWindow):
         if not title:
             return
         self.conversations[index]["title"] = title
+        if index == self.current_conversation_index:
+            self.update_chat_header()
         self.refresh_conversation_list()
         self.persist_conversations()
 
@@ -873,7 +900,7 @@ class ChatWindow(SettingsPanelMixin, QMainWindow):
         max_width = self.current_chat_bubble_width()
         bubble.setMaximumWidth(max_width)
         bubble_layout = QVBoxLayout(bubble)
-        bubble_layout.setContentsMargins(16 if not is_user else 15, 9, 18 if is_user else 15, 11)
+        bubble_layout.setContentsMargins(16 if not is_user else 15, 10, 18 if is_user else 15, 10)
         bubble_layout.setSpacing(8 if image_paths else 0)
 
         if display_text.strip() or not image_paths:
@@ -890,6 +917,8 @@ class ChatWindow(SettingsPanelMixin, QMainWindow):
             body.setAutoFillBackground(False)
             body.setStyleSheet("background: transparent; border: 0;")
             body.setTextFormat(Qt.RichText)
+            if "\n" not in display_text and len(display_text.strip()) <= 16:
+                body.setAlignment(Qt.AlignCenter)
             body.setWordWrap(True)
             body.setOpenExternalLinks(True)
             body.setTextInteractionFlags(Qt.TextSelectableByMouse | Qt.LinksAccessibleByMouse)
@@ -1338,6 +1367,7 @@ class ChatWindow(SettingsPanelMixin, QMainWindow):
         super().resizeEvent(event)
         if self.resize_grip is not None:
             self.resize_grip.move(self.width() - self.resize_grip.width() - 4, self.height() - self.resize_grip.height() - 4)
+        self.update_chat_bubble_widths()
         self.position_status_label()
 
     def closeEvent(self, event: QCloseEvent) -> None:

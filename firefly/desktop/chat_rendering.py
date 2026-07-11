@@ -73,6 +73,12 @@ def render_chat_html(text: str, *, dark_theme: bool = False, is_user: bool = Fal
     quote_color = "#d9f2ec" if dark_theme else "#2d4a45"
     if is_user and dark_theme:
         body_color = "#f1fbf8"
+    if "\n" not in content and not re.match(r"^(#{1,6}\s|[-*>]\s|\d+[.)、]\s)", content):
+        inline = render_chat_inline(content, dark_theme=dark_theme)
+        return (
+            "<div style='font-family:Microsoft YaHei UI, Microsoft YaHei, Segoe UI, sans-serif; "
+            f"color:{body_color}; font-size:15px; font-weight:400; line-height:1.62;'>{inline}</div>"
+        )
     blocks: list[str] = []
     code_lines: list[str] = []
     in_code = False

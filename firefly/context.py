@@ -404,7 +404,13 @@ def _all_configured_library_roots(config: dict[str, object], workspace: Path) ->
 
 
 def library_write_roots(config: dict[str, object], workspace: Path) -> list[Path]:
-    return library_roots(config, workspace) if bool(config.get("library_allow_write", False)) else []
+    if not bool(config.get("library_allow_write", False)):
+        return []
+    raw_locations = config.get("library_locations")
+    if not isinstance(raw_locations, list):
+        return []
+    writable = [item for item in raw_locations if not isinstance(item, dict) or bool(item.get("write", True))]
+    return _all_configured_library_roots({**config, "library_locations": writable}, workspace)
 
 
 def library_write_allowed(path: str | Path, config: dict[str, object], workspace: Path) -> bool:

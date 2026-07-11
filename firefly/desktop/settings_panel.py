@@ -8,27 +8,31 @@ import shutil
 import urllib.error
 import urllib.request
 from collections.abc import Callable
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from PySide6.QtCore import QThread, Qt, QUrl
-from PySide6.QtGui import QDesktopServices, QIntValidator
+from PySide6.QtCore import QPoint, QRectF, QSize, QThread, Qt, QUrl
+from PySide6.QtGui import QColor, QDesktopServices, QIcon, QIntValidator, QPainter, QPixmap
 from PySide6.QtWidgets import (
+    QButtonGroup,
     QCheckBox,
     QComboBox,
     QFileDialog,
     QFormLayout,
     QFrame,
+    QHeaderView,
     QHBoxLayout,
+    QGridLayout,
     QLabel,
     QLineEdit,
-    QListWidget,
-    QListWidgetItem,
     QPushButton,
     QScrollArea,
     QSplitter,
     QStackedWidget,
     QTextBrowser,
+    QTreeWidget,
+    QTreeWidgetItem,
     QVBoxLayout,
     QWidget,
 )
@@ -48,7 +52,7 @@ from firefly.context import (
     skill_registry_summary,
     skills_root,
 )
-from firefly.desktop.styles import THEME_LABELS, normalized_theme_mode
+from firefly.desktop.styles import THEME_LABELS, combo_popup_style, normalized_theme_mode
 from firefly.desktop.workers import TaskWorker
 from firefly.desktop_tools import firefly_desktop_tools
 from firefly.library_index import library_index_summary, refresh_library_index
@@ -56,6 +60,73 @@ from firefly.memory import create_everos_client, memory_status_summary
 from firefly.workspace import save_config
 
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"}
+UI_ASSET_ROOT = Path(__file__).resolve().parents[1] / "assets" / "ui"
+
+
+def settings_nav_icon(name: str) -> QIcon:
+    normal = QIcon(str(UI_ASSET_ROOT / name)).pixmap(20, 20)
+    selected = QPixmap(normal)
+    painter = QPainter(selected)
+    painter.setCompositionMode(QPainter.CompositionMode_SourceIn)
+    painter.fillRect(selected.rect(), QColor("#168f86"))
+    painter.end()
+    icon = QIcon()
+    icon.addPixmap(normal, QIcon.Normal, QIcon.Off)
+    icon.addPixmap(selected, QIcon.Normal, QIcon.On)
+    return icon
+
+
+class SlidingToggle(QCheckBox):
+    def __init__(self, parent: QWidget | None = None, text: str = "") -> None:
+        super().__init__(parent)
+        self.setText(text)
+        if text:
+            self.setFixedHeight(22)
+        else:
+            self.setFixedSize(38, 22)
+        self.setCursor(Qt.PointingHandCursor)
+
+    def sizeHint(self) -> QSize:
+        if not self.text():
+            return QSize(38, 22)
+        return QSize(44 + self.fontMetrics().horizontalAdvance(self.text()), 22)
+
+    def paintEvent(self, event) -> None:
+        del event
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing, True)
+        track = QRectF(2, 2, 34, 18)
+        if self.isChecked():
+            track_color = QColor("#159a78") if self.isEnabled() else QColor("#8fbab0")
+            knob_x = 20
+        else:
+            track_color = QColor("#c7d1cf") if self.isEnabled() else QColor("#dce5e3")
+            knob_x = 4
+        painter.setPen(Qt.NoPen)
+        painter.setBrush(track_color)
+        painter.drawRoundedRect(track, 9, 9)
+        painter.setBrush(QColor("#ffffff"))
+        painter.drawEllipse(QRectF(knob_x, 4, 14, 14))
+        if self.text():
+            color = QColor("#cce8e2" if self.window().property("darkTheme") else "#3f6761")
+            painter.setPen(color)
+            painter.drawText(QRectF(44, 0, self.width() - 44, self.height()), Qt.AlignVCenter, self.text())
+
+
+class SettingsComboBox(QComboBox):
+    def paintEvent(self, event) -> None:
+        super().paintEvent(event)
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing, True)
+        painter.setPen(QColor("#9ce5dc" if self.window().property("darkTheme") else "#08786f"))
+        x = self.width() - 14
+        y = self.height() // 2 - 2
+        painter.drawLine(QPoint(x - 4, y), QPoint(x, y + 4))
+        painter.drawLine(QPoint(x, y + 4), QPoint(x + 4, y))
+
+    def showPopup(self) -> None:
+        self.view().setStyleSheet(combo_popup_style(bool(self.window().property("darkTheme"))))
+        super().showPopup()
 
 
 def fetch_openai_compatible_models(base_url: str, api_key: str = "", timeout: float = 8) -> list[str]:
@@ -126,18 +197,10 @@ class SettingsPanelMixin:
     def build_settings_page(self) -> QWidget:
         page = QWidget(self)
         page.setObjectName("pageSurface")
-        layout = QVBoxLayout(page)
-        layout.setContentsMargins(18, 16, 18, 18)
-        layout.setSpacing(14)
-        title = QLabel("设置", page)
-        title.setObjectName("pageTitle")
-        caption = QLabel("模型、资料、联网、记忆、技能和系统权限都在这里管理。", page)
-        caption.setObjectName("sectionCaption")
-        layout.addWidget(title)
-        layout.addWidget(caption)
-        body = QHBoxLayout()
-        body.setSpacing(14)
-        body.addWidget(self.build_settings_nav(), 0)
+        layout = QHBoxLayout(page)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+        layout.addWidget(self.build_settings_nav(), 0)
         self.settings_stack = QStackedWidget(page)
         self.settings_stack.addWidget(self.build_model_panel())
         self.settings_stack.addWidget(self.build_files_panel())
@@ -146,18 +209,21 @@ class SettingsPanelMixin:
         self.settings_stack.addWidget(self.build_skills_panel())
         self.settings_stack.addWidget(self.build_appearance_panel())
         self.settings_stack.addWidget(self.build_computer_control_panel())
-        body.addWidget(self.settings_stack, 1)
-        layout.addLayout(body, 1)
+        layout.addWidget(self.settings_stack, 1)
         self.switch_settings_page(0)
         return page
 
     def build_settings_nav(self) -> QWidget:
         nav = QWidget(self)
         nav.setObjectName("settingsNav")
-        nav.setFixedWidth(162)
+        nav.setFixedWidth(190)
         layout = QVBoxLayout(nav)
-        layout.setContentsMargins(8, 8, 8, 8)
+        layout.setContentsMargins(18, 28, 14, 18)
         layout.setSpacing(8)
+        title = QLabel("设置", nav)
+        title.setObjectName("settingsNavTitle")
+        layout.addWidget(title)
+        layout.addSpacing(18)
         self.model_settings_button = QPushButton("回应核心", nav)
         self.files_settings_button = QPushButton("资料舱", nav)
         self.web_search_settings_button = QPushButton("星网检索", nav)
@@ -174,8 +240,19 @@ class SettingsPanelMixin:
             self.appearance_settings_button,
             self.computer_control_settings_button,
         ]
-        for index, button in enumerate(self.settings_buttons):
+        icon_names = (
+            "settings-model.svg",
+            "settings-library.svg",
+            "settings-web.svg",
+            "settings-memory.svg",
+            "settings-skills.svg",
+            "settings-appearance.svg",
+            "settings-permissions.svg",
+        )
+        for index, (button, icon_name) in enumerate(zip(self.settings_buttons, icon_names, strict=True)):
             button.setObjectName("settingsTab")
+            button.setIcon(settings_nav_icon(icon_name))
+            button.setIconSize(QSize(20, 20))
             button.setCheckable(True)
             button.setCursor(Qt.PointingHandCursor)
             button.setMinimumHeight(42)
@@ -191,19 +268,20 @@ class SettingsPanelMixin:
 
     def build_model_panel(self) -> QWidget:
         panel = QWidget(self)
-        panel.setObjectName("settingsCard")
+        panel.setObjectName("settingsWorkspace")
         layout = QVBoxLayout(panel)
-        layout.setContentsMargins(18, 16, 18, 18)
-        layout.setSpacing(12)
+        layout.setContentsMargins(48, 34, 48, 32)
+        layout.setSpacing(0)
         title = QLabel("回应核心", panel)
-        title.setObjectName("sectionTitle")
-        caption = QLabel("配置流萤调用的模型接口，保存后会立即应用到当前会话。", panel)
-        caption.setObjectName("sectionCaption")
+        title.setObjectName("settingsPageTitle")
+        caption = QLabel("配置模型、供应源和生图能力", panel)
+        caption.setObjectName("settingsPageCaption")
         layout.addWidget(title)
         layout.addWidget(caption)
+        layout.addSpacing(34)
 
         statuses = self.openharness_profile_statuses()
-        self.provider_input = QComboBox(panel)
+        self.provider_input = SettingsComboBox(panel)
         for name, info in statuses.items():
             self.provider_input.addItem(f"{name} · {info.get('label')}", name)
         active_profile = str(self.config.get("provider_profile") or self.openharness_active_profile() or "claude-api")
@@ -211,12 +289,12 @@ class SettingsPanelMixin:
         if profile_index >= 0:
             self.provider_input.setCurrentIndex(profile_index)
         self.base_url_input = QLineEdit(self.current_profile_base_url(), panel)
-        self.model_input = QComboBox(panel)
+        self.model_input = SettingsComboBox(panel)
         self.model_input.setEditable(True)
         model = str(self.config.get("model") or self.current_profile_model() or "")
         self.model_input.addItem(model)
         self.model_input.setCurrentText(model)
-        self.image_model_input = QComboBox(panel)
+        self.image_model_input = SettingsComboBox(panel)
         self.image_model_input.setEditable(True)
         image_model = str(self.config.get("image_generation_model") or "")
         self.populate_image_model_input(self.current_profile_models(), image_model)
@@ -224,31 +302,84 @@ class SettingsPanelMixin:
         self.api_key_input.setPlaceholderText("留空则不修改 OpenHarness 已保存密钥")
         self.api_key_input.setEchoMode(QLineEdit.Password)
         form = QFormLayout()
-        form.addRow("OpenHarness Profile", self.provider_input)
-        form.addRow("接口地址", self.base_url_input)
+        form.setLabelAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        form.setFieldGrowthPolicy(QFormLayout.AllNonFixedFieldsGrow)
+        form.setHorizontalSpacing(32)
+        form.setVerticalSpacing(18)
+        form.addRow("供应源", self.provider_input)
         form.addRow("模型", self.model_input)
         form.addRow("生图模型", self.image_model_input)
-        form.addRow("密钥", self.api_key_input)
+        form.addRow("接口地址", self.base_url_input)
+        form.addRow("API 密钥", self.api_key_input)
         layout.addLayout(form)
+        layout.addSpacing(30)
 
         row = QHBoxLayout()
-        self.load_models_button = QPushButton("同步模型列表", panel)
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(12)
+        self.load_models_button = QPushButton("同步模型", panel)
         self.load_models_button.setObjectName("secondaryButton")
         self.load_models_button.clicked.connect(self.load_models_from_api)
         self.llm_test_button = QPushButton("测试连接", panel)
         self.llm_test_button.setObjectName("secondaryButton")
         self.llm_test_button.clicked.connect(self.test_llm_connection)
-        save_button = QPushButton("保存并应用", panel)
+        save_button = QPushButton("保存更改", panel)
         save_button.clicked.connect(self.save_model_settings)
         row.addWidget(self.load_models_button)
         row.addWidget(self.llm_test_button)
         row.addStretch(1)
         row.addWidget(save_button)
         layout.addLayout(row)
-        self.model_status_label = QLabel(self.model_summary(), panel)
-        self.model_status_label.setObjectName("modelSummary")
+        layout.addSpacing(34)
+
+        status_panel = QWidget(panel)
+        status_panel.setObjectName("connectionStatusPanel")
+        status_layout = QVBoxLayout(status_panel)
+        status_layout.setContentsMargins(20, 18, 20, 18)
+        status_layout.setSpacing(12)
+        status_heading = QHBoxLayout()
+        status_heading.setContentsMargins(0, 0, 0, 0)
+        status_title = QLabel("连接状态", status_panel)
+        status_title.setObjectName("settingsStatusHeading")
+        self.model_connection_state_label = QLabel("● 正常", status_panel)
+        self.model_connection_state_label.setObjectName("connectionState")
+        status_heading.addWidget(status_title)
+        status_heading.addStretch(1)
+        status_heading.addWidget(self.model_connection_state_label)
+        status_layout.addLayout(status_heading)
+
+        self.model_status_primary_label = QLabel("", status_panel)
+        self.model_status_primary_label.setObjectName("connectionPrimary")
+        status_layout.addWidget(self.model_status_primary_label)
+        details = QGridLayout()
+        details.setContentsMargins(0, 0, 0, 0)
+        details.setHorizontalSpacing(54)
+        details.setVerticalSpacing(6)
+        self.model_status_value_labels: dict[str, QLabel] = {}
+        for row_index, (left_key, left_label, right_key, right_label) in enumerate(
+            (
+                ("model", "模型", "base_url", "接口地址"),
+                ("provider", "供应源", "credential", "API 密钥"),
+            )
+        ):
+            for column, key, label_text in ((0, left_key, left_label), (1, right_key, right_label)):
+                label = QLabel(label_text, status_panel)
+                label.setObjectName("connectionDetailLabel")
+                value = QLabel("", status_panel)
+                value.setObjectName("connectionDetailValue")
+                value.setWordWrap(True)
+                self.model_status_value_labels[key] = value
+                details.addWidget(label, row_index * 2, column)
+                details.addWidget(value, row_index * 2 + 1, column)
+        details.setColumnStretch(0, 1)
+        details.setColumnStretch(1, 1)
+        status_layout.addLayout(details)
+        self.model_status_label = QLabel("", panel)
+        self.model_status_label.setObjectName("connectionStatusText")
         self.model_status_label.setWordWrap(True)
-        layout.addWidget(self.model_status_label)
+        status_layout.addWidget(self.model_status_label)
+        layout.addWidget(status_panel)
+        self.update_model_connection_state()
         layout.addStretch(1)
         return panel
 
@@ -264,11 +395,11 @@ class SettingsPanelMixin:
         caption.setObjectName("sectionCaption")
         layout.addWidget(title)
         layout.addWidget(caption)
-        self.web_search_enabled_check = QCheckBox("启用星网检索", panel)
+        self.web_search_enabled_check = SlidingToggle(panel, "启用星网检索")
         self.web_search_enabled_check.setChecked(bool(self.config.get("web_search_enabled", False)))
-        self.web_search_auto_check = QCheckBox("按问题自动判断是否检索", panel)
+        self.web_search_auto_check = SlidingToggle(panel, "按问题自动判断是否检索")
         self.web_search_auto_check.setChecked(bool(self.config.get("web_search_auto", True)))
-        self.web_fetch_enabled_check = QCheckBox("自动抓取消息里的网页链接", panel)
+        self.web_fetch_enabled_check = SlidingToggle(panel, "自动抓取消息里的网页链接")
         self.web_fetch_enabled_check.setChecked(bool(self.config.get("web_fetch_enabled", True)))
         self.web_search_max_results_input = QLineEdit(str(self.config.get("web_search_max_results") or 5), panel)
         self.web_search_max_results_input.setValidator(QIntValidator(1, 10, self.web_search_max_results_input))
@@ -338,15 +469,15 @@ class SettingsPanelMixin:
         layout.addWidget(title)
         layout.addWidget(caption)
 
-        self.memory_enabled_check = QCheckBox("启用长期记忆", panel)
+        self.memory_enabled_check = SlidingToggle(panel, "启用长期记忆")
         self.memory_enabled_check.setChecked(bool(self.config.get("memory_enabled", False)))
-        self.everos_memory_enabled_check = QCheckBox("接入 EverOS", panel)
+        self.everos_memory_enabled_check = SlidingToggle(panel, "接入 EverOS")
         self.everos_memory_enabled_check.setChecked(bool(self.config.get("everos_memory_enabled", self.config.get("memory_enabled", False))))
-        self.openharness_memdir_enabled_check = QCheckBox("接入 OpenHarness memdir", panel)
+        self.openharness_memdir_enabled_check = SlidingToggle(panel, "接入 OpenHarness memdir")
         self.openharness_memdir_enabled_check.setChecked(bool(self.config.get("openharness_memdir_enabled", self.config.get("memory_enabled", False))))
-        self.openharness_session_memory_enabled_check = QCheckBox("接入 OpenHarness session memory", panel)
+        self.openharness_session_memory_enabled_check = SlidingToggle(panel, "接入 OpenHarness session memory")
         self.openharness_session_memory_enabled_check.setChecked(bool(self.config.get("openharness_session_memory_enabled", self.config.get("memory_enabled", False))))
-        self.memory_context_link_check = QCheckBox("自动承接上下文", panel)
+        self.memory_context_link_check = SlidingToggle(panel, "自动承接上下文")
         self.memory_context_link_check.setToolTip("用上一段对话摘要作为新对话背景，不复制完整聊天记录")
         self.memory_context_link_check.setChecked(bool(self.config.get("memory_context_link_enabled", True)))
         self.memory_base_url_input = QLineEdit(str(self.config.get("memory_base_url") or "http://127.0.0.1:8000"), panel)
@@ -354,10 +485,10 @@ class SettingsPanelMixin:
         self.memory_project_id_input = QLineEdit(str(self.config.get("memory_project_id") or "default"), panel)
         self.openharness_memory_cwd_input = QLineEdit(str(self.config.get("openharness_memory_cwd") or self.workspace), panel)
         self.openharness_session_id_input = QLineEdit(str(self.config.get("openharness_session_id") or "firefly"), panel)
-        self.memory_method_input = QComboBox(panel)
+        self.memory_method_input = SettingsComboBox(panel)
         self.memory_method_input.addItems(["agentic", "hybrid", "vector"])
         self.memory_method_input.setCurrentText(str(self.config.get("memory_method") or "agentic"))
-        self.memory_fallback_input = QComboBox(panel)
+        self.memory_fallback_input = SettingsComboBox(panel)
         self.memory_fallback_input.addItems(["keyword", ""])
         self.memory_fallback_input.setCurrentText(str(self.config.get("memory_fallback_method") or "keyword"))
 
@@ -450,7 +581,7 @@ class SettingsPanelMixin:
 
         title = QLabel("技能库", panel)
         title.setObjectName("skillPageTitle")
-        self.skills_enabled_check = QCheckBox("启用 OpenHarness Skills", panel)
+        self.skills_enabled_check = SlidingToggle(panel, "启用 OpenHarness Skills")
         self.skills_enabled_check.setChecked(bool(self.config.get("skills_enabled", False)))
         header_row = QHBoxLayout()
         header_row.setContentsMargins(0, 0, 0, 0)
@@ -563,7 +694,7 @@ class SettingsPanelMixin:
         layout.addWidget(title)
         layout.addWidget(caption)
 
-        self.theme_mode_input = QComboBox(panel)
+        self.theme_mode_input = SettingsComboBox(panel)
         for value, label in THEME_LABELS.items():
             self.theme_mode_input.addItem(label, value)
         index = self.theme_mode_input.findData(normalized_theme_mode(self.config.get("theme_mode")))
@@ -619,87 +750,200 @@ class SettingsPanelMixin:
         scroll.setFrameShape(QFrame.NoFrame)
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         panel = QWidget(scroll)
-        panel.setObjectName("settingsCard")
+        panel.setObjectName("settingsWorkspace")
         layout = QVBoxLayout(panel)
-        layout.setContentsMargins(18, 16, 18, 28)
-        layout.setSpacing(18)
+        layout.setContentsMargins(48, 34, 48, 32)
+        layout.setSpacing(0)
 
         title = QLabel("行动权限", panel)
-        title.setObjectName("sectionTitle")
-        caption = QLabel("配置 OpenHarness 的工具权限和 sandbox。", panel)
-        caption.setObjectName("sectionCaption")
+        title.setObjectName("settingsPageTitle")
+        caption = QLabel("控制流萤可以读取、修改和操作的范围", panel)
+        caption.setObjectName("settingsPageCaption")
         layout.addWidget(title)
         layout.addWidget(caption)
+        layout.addSpacing(34)
 
-        self.permission_mode_input = QComboBox(panel)
+        self.permission_mode_input = SettingsComboBox(panel)
         self.permission_mode_input.addItems(["default", "plan", "full_auto"])
         self.permission_mode_input.setCurrentText(permission_mode_value(self.config))
-        self.sandbox_enabled_check = QCheckBox("启用 OpenHarness sandbox", panel)
+        self.permission_mode_input.hide()
+        self.sandbox_enabled_check = SlidingToggle(panel)
         self.sandbox_enabled_check.setChecked(bool(self.config.get("sandbox_enabled", False)))
         self.sandbox_enabled_check.stateChanged.connect(self.update_computer_control_options)
-        self.sandbox_backend_input = QComboBox(panel)
+        self.sandbox_backend_input = SettingsComboBox(panel)
         self.sandbox_backend_input.addItems(["srt", "docker"])
         backend = str(self.config.get("sandbox_backend") or "srt")
         self.sandbox_backend_input.setCurrentText(backend if backend in {"srt", "docker"} else "srt")
-        self.sandbox_fail_check = QCheckBox("sandbox 不可用时中止工具执行", panel)
+        self.sandbox_fail_check = SlidingToggle(panel)
         self.sandbox_fail_check.setChecked(bool(self.config.get("sandbox_fail_if_unavailable", False)))
-        self.desktop_control_enabled_check = QCheckBox("启用 Firefly 电脑操控工具", panel)
+        self.desktop_control_enabled_check = SlidingToggle(panel)
         self.desktop_control_enabled_check.setChecked(bool(self.config.get("desktop_control_enabled", False)))
-        self.firefly_watch_enabled_check = QCheckBox("启用萤火巡望", panel)
+        self.firefly_watch_enabled_check = SlidingToggle(panel)
         self.firefly_watch_enabled_check.setToolTip("按间隔读取当前窗口截图，让流萤通过 Live2D 气泡轻量互动")
         self.firefly_watch_enabled_check.setChecked(bool(self.config.get("firefly_watch_enabled", False)))
         self.firefly_watch_interval_input = QLineEdit(str(self.config.get("firefly_watch_interval_sec") or 300), panel)
         self.firefly_watch_interval_input.setValidator(QIntValidator(30, 86400, self.firefly_watch_interval_input))
-        self.chat_window_context_enabled_check = QCheckBox("启用临场感知", panel)
+        self.chat_window_context_enabled_check = SlidingToggle(panel)
         self.chat_window_context_enabled_check.setToolTip("聊天发送时自动附带当前窗口截图和窗口标题")
         self.chat_window_context_enabled_check.setChecked(bool(self.config.get("chat_window_context_enabled", False)))
-        self.autostart_enabled_check = QCheckBox("开机自启 Firefly", panel)
+        self.autostart_enabled_check = SlidingToggle(panel)
         self.autostart_enabled_check.setChecked(is_autostart_enabled() if autostart_supported() else False)
         self.autostart_enabled_check.setEnabled(autostart_supported())
 
-        permission_title = QLabel("OpenHarness 权限", panel)
-        permission_title.setObjectName("sectionTitle")
-        layout.addWidget(permission_title)
-        permission_form = QFormLayout()
-        permission_form.setVerticalSpacing(10)
-        permission_form.addRow("权限模式", self.permission_mode_input)
-        permission_form.addRow("", self.sandbox_enabled_check)
-        permission_form.addRow("sandbox 后端", self.sandbox_backend_input)
-        permission_form.addRow("", self.sandbox_fail_check)
-        layout.addLayout(permission_form)
+        self.computer_permission_state_labels: dict[str, QLabel] = {}
 
-        desktop_title = QLabel("桌面能力", panel)
-        desktop_title.setObjectName("sectionTitle")
-        layout.addWidget(desktop_title)
-        layout.addWidget(self.desktop_control_enabled_check)
+        mode_row = QHBoxLayout()
+        mode_row.setContentsMargins(0, 0, 0, 0)
+        mode_row.setSpacing(28)
+        mode_label = QLabel("权限模式", panel)
+        mode_label.setObjectName("settingsRowLabel")
+        mode_row.addWidget(mode_label)
+        mode_group_widget = QWidget(panel)
+        mode_group_widget.setObjectName("permissionModeControl")
+        mode_group_layout = QHBoxLayout(mode_group_widget)
+        mode_group_layout.setContentsMargins(1, 1, 1, 1)
+        mode_group_layout.setSpacing(0)
+        self.permission_mode_group = QButtonGroup(panel)
+        self.permission_mode_buttons: dict[str, QPushButton] = {}
+        for index, (mode, label) in enumerate((("default", "默认"), ("plan", "计划"), ("full_auto", "完全自动"))):
+            button = QPushButton(label, mode_group_widget)
+            button.setObjectName(("permissionModeFirst", "permissionModeMiddle", "permissionModeLast")[index])
+            button.setCheckable(True)
+            button.clicked.connect(lambda _checked=False, value=mode: self.set_permission_mode(value))
+            self.permission_mode_group.addButton(button)
+            self.permission_mode_buttons[mode] = button
+            mode_group_layout.addWidget(button)
+        mode_row.addWidget(mode_group_widget, 1)
+        layout.addLayout(mode_row)
+        layout.addSpacing(22)
 
-        interaction_title = QLabel("流萤互动", panel)
-        interaction_title.setObjectName("sectionTitle")
-        layout.addWidget(interaction_title)
-        interaction_form = QFormLayout()
-        interaction_form.setVerticalSpacing(10)
-        interaction_form.addRow("", self.firefly_watch_enabled_check)
-        interaction_form.addRow("巡望间隔（秒）", self.firefly_watch_interval_input)
-        interaction_form.addRow("", self.chat_window_context_enabled_check)
-        layout.addLayout(interaction_form)
+        def divider() -> QFrame:
+            line = QFrame(panel)
+            line.setObjectName("settingsDivider")
+            line.setFrameShape(QFrame.HLine)
+            return line
 
-        system_title = QLabel("系统", panel)
-        system_title.setObjectName("sectionTitle")
-        layout.addWidget(system_title)
-        layout.addWidget(self.autostart_enabled_check)
+        def title_row(text: str) -> None:
+            section_title = QLabel(text, panel)
+            section_title.setObjectName("settingsSectionTitle")
+            layout.addWidget(section_title)
+            layout.addSpacing(12)
 
-        save_button = QPushButton("保存并应用", panel)
+        def toggle_row(text: str, control: QCheckBox, state_key: str) -> None:
+            row = QWidget(panel)
+            row.setObjectName("permissionRow")
+            row_layout = QHBoxLayout(row)
+            row_layout.setContentsMargins(0, 0, 0, 0)
+            row_layout.setSpacing(14)
+            label = QLabel(text, row)
+            label.setObjectName("settingsRowLabel")
+            control.setText("")
+            control.setObjectName("permissionToggle")
+            state = QLabel(row)
+            state.setObjectName("permissionState")
+            self.computer_permission_state_labels[state_key] = state
+            row_layout.addWidget(label)
+            row_layout.addStretch(1)
+            row_layout.addWidget(control)
+            row_layout.addWidget(state)
+            layout.addWidget(row)
+            layout.addSpacing(10)
+
+        title_row("桌面操作")
+        toggle_row("启用电脑操控工具", self.desktop_control_enabled_check, "desktop")
+        toggle_row("聊天时感知当前窗口", self.chat_window_context_enabled_check, "context")
+        layout.addSpacing(10)
+        layout.addWidget(divider())
+        layout.addSpacing(24)
+
+        title_row("沙箱保护")
+        toggle_row("启用 sandbox", self.sandbox_enabled_check, "sandbox")
+        sandbox_row = QHBoxLayout()
+        sandbox_row.setContentsMargins(0, 0, 0, 0)
+        sandbox_row.setSpacing(14)
+        sandbox_label = QLabel("后端", panel)
+        sandbox_label.setObjectName("settingsRowLabel")
+        sandbox_row.addWidget(sandbox_label)
+        sandbox_row.addStretch(1)
+        self.sandbox_backend_input.setMaximumWidth(240)
+        sandbox_row.addWidget(self.sandbox_backend_input)
+        sandbox_state = QLabel("", panel)
+        sandbox_state.setObjectName("permissionState")
+        self.computer_permission_state_labels["sandbox_backend"] = sandbox_state
+        sandbox_row.addWidget(sandbox_state)
+        layout.addLayout(sandbox_row)
+        layout.addSpacing(10)
+        toggle_row("不可用时中止工具执行", self.sandbox_fail_check, "sandbox_fail")
+        layout.addSpacing(10)
+        layout.addWidget(divider())
+        layout.addSpacing(24)
+
+        title_row("萤火巡望")
+        toggle_row("启用萤火巡望", self.firefly_watch_enabled_check, "watch")
+        interval_row = QHBoxLayout()
+        interval_row.setContentsMargins(0, 0, 0, 0)
+        interval_row.setSpacing(14)
+        interval_label = QLabel("巡望间隔", panel)
+        interval_label.setObjectName("settingsRowLabel")
+        interval_row.addWidget(interval_label)
+        interval_row.addStretch(1)
+        self.firefly_watch_interval_input.setMaximumWidth(240)
+        interval_row.addWidget(self.firefly_watch_interval_input)
+        interval_state = QLabel("", panel)
+        interval_state.setObjectName("permissionState")
+        self.computer_permission_state_labels["watch_interval"] = interval_state
+        interval_row.addWidget(interval_state)
+        layout.addLayout(interval_row)
+        layout.addSpacing(10)
+        layout.addWidget(divider())
+        layout.addSpacing(24)
+
+        title_row("系统")
+        toggle_row("开机自启 Firefly", self.autostart_enabled_check, "autostart")
+        layout.addSpacing(18)
+
+        warning = QLabel("高风险操作仍将按当前权限模式处理", panel)
+        warning.setObjectName("permissionWarning")
+        layout.addWidget(warning)
+        layout.addSpacing(18)
+        action_row = QHBoxLayout()
+        action_row.setContentsMargins(0, 0, 0, 0)
+        action_row.addStretch(1)
+        save_button = QPushButton("保存更改", panel)
         save_button.clicked.connect(self.save_computer_control_settings)
-        layout.addWidget(save_button, alignment=Qt.AlignLeft)
+        action_row.addWidget(save_button)
+        layout.addLayout(action_row)
+        layout.addSpacing(16)
 
         self.computer_control_status_label = QLabel(self.computer_control_summary(), panel)
-        self.computer_control_status_label.setObjectName("modelSummary")
+        self.computer_control_status_label.setObjectName("settingsInlineStatus")
         self.computer_control_status_label.setWordWrap(True)
+        self.computer_control_status_label.hide()
         layout.addWidget(self.computer_control_status_label)
-        layout.addStretch(1)
+        self.permission_mode_input.currentTextChanged.connect(self.sync_permission_mode_buttons)
+        for control in (
+            self.sandbox_enabled_check,
+            self.sandbox_fail_check,
+            self.desktop_control_enabled_check,
+            self.firefly_watch_enabled_check,
+            self.chat_window_context_enabled_check,
+            self.autostart_enabled_check,
+        ):
+            control.stateChanged.connect(self.update_computer_control_options)
+        self.sandbox_backend_input.currentTextChanged.connect(self.update_computer_control_options)
+        self.firefly_watch_interval_input.textChanged.connect(self.update_computer_control_options)
+        self.sync_permission_mode_buttons(self.permission_mode_input.currentText())
         self.update_computer_control_options()
         scroll.setWidget(panel)
         return scroll
+
+    def set_permission_mode(self, mode: str) -> None:
+        if mode in {"default", "plan", "full_auto"}:
+            self.permission_mode_input.setCurrentText(mode)
+
+    def sync_permission_mode_buttons(self, mode: str) -> None:
+        for value, button in getattr(self, "permission_mode_buttons", {}).items():
+            button.setChecked(value == mode)
 
     def computer_control_summary(self) -> str:
         sandbox_state = "已开启" if bool(self.config.get("sandbox_enabled", False)) else "已关闭"
@@ -740,12 +984,27 @@ class SettingsPanelMixin:
         self.sandbox_fail_check.setEnabled(enabled)
         if not enabled:
             self.sandbox_fail_check.setChecked(False)
+        labels = getattr(self, "computer_permission_state_labels", {})
+        states = {
+            "desktop": "已允许" if self.desktop_control_enabled_check.isChecked() else "已关闭",
+            "context": "已允许" if self.chat_window_context_enabled_check.isChecked() else "已关闭",
+            "sandbox": "已启用" if enabled else "已关闭",
+            "sandbox_backend": "保护正常" if enabled else "未启用",
+            "sandbox_fail": "已启用" if enabled and self.sandbox_fail_check.isChecked() else "未启用",
+            "watch": "运行中" if self.firefly_watch_enabled_check.isChecked() else "已关闭",
+            "watch_interval": f"{self.firefly_watch_interval_input.text().strip() or '300'} 秒",
+            "autostart": "已启用" if self.autostart_enabled_check.isChecked() else "已关闭",
+        }
+        for key, text in states.items():
+            if key in labels:
+                labels[key].setText(text)
 
     def save_computer_control_settings(self) -> None:
         try:
             if autostart_supported():
                 set_autostart(self.autostart_enabled_check.isChecked(), self.runtime.cwd or Path.cwd())
         except (OSError, RuntimeError) as error:
+            self.computer_control_status_label.show()
             self.computer_control_status_label.setText(f"{self.computer_control_summary()}\n{error}")
             return
         self.config = {
@@ -763,101 +1022,125 @@ class SettingsPanelMixin:
         save_config(self.config, self.workspace)
         if hasattr(self, "sync_context_button"):
             self.sync_context_button()
+        self.computer_control_status_label.show()
         self.computer_control_status_label.setText(f"{self.computer_control_summary()}\n已保存并应用。")
 
     def build_files_panel(self) -> QWidget:
         panel = QWidget(self)
-        panel.setObjectName("settingsCard")
+        panel.setObjectName("settingsWorkspace")
         layout = QVBoxLayout(panel)
-        layout.setContentsMargins(18, 16, 18, 18)
-        layout.setSpacing(12)
+        layout.setContentsMargins(48, 34, 48, 0)
+        layout.setSpacing(0)
         title = QLabel("资料舱", panel)
-        title.setObjectName("sectionTitle")
-        caption = QLabel("管理流萤可读取和写入的本地资料目录；只有允许读取的目录会参与检索。", panel)
-        caption.setObjectName("sectionCaption")
+        title.setObjectName("settingsPageTitle")
+        caption = QLabel("管理可读取的本地资料和全文索引", panel)
+        caption.setObjectName("settingsPageCaption")
         layout.addWidget(title)
         layout.addWidget(caption)
+        layout.addSpacing(34)
 
         body = QSplitter(Qt.Horizontal, panel)
         body.setObjectName("librarySplitter")
         body.setChildrenCollapsible(False)
 
         directory_column = QWidget(panel)
+        directory_column.setObjectName("libraryColumn")
         directory_layout = QVBoxLayout(directory_column)
         directory_layout.setContentsMargins(0, 0, 0, 0)
-        directory_layout.setSpacing(8)
-        directory_title = QLabel("资料目录", directory_column)
-        directory_title.setObjectName("sectionTitle")
+        directory_layout.setSpacing(10)
+        directory_layout.setAlignment(Qt.AlignTop)
+        directory_title = QLabel("授权目录", directory_column)
+        directory_title.setObjectName("libraryColumnTitle")
         directory_layout.addWidget(directory_title)
         path_row = QHBoxLayout()
         path_row.setContentsMargins(0, 0, 0, 0)
+        path_row.setSpacing(8)
         self.location_path_input = QLineEdit(directory_column)
-        self.location_path_input.setPlaceholderText("粘贴目录路径，例如 D:/notes")
-        add_path_button = QPushButton("添加路径", directory_column)
+        self.location_path_input.setPlaceholderText("选择或输入资料目录")
+        browse_button = QPushButton("", directory_column)
+        browse_button.setObjectName("secondaryButton")
+        browse_button.setIcon(QIcon(str(UI_ASSET_ROOT / "folder.svg")))
+        browse_button.setToolTip("选择目录")
+        browse_button.setFixedWidth(38)
+        browse_button.clicked.connect(self.choose_library_directory)
+        add_path_button = QPushButton("添加目录", directory_column)
         add_path_button.clicked.connect(self.add_library_location_from_input)
         path_row.addWidget(self.location_path_input, 1)
+        path_row.addWidget(browse_button)
         path_row.addWidget(add_path_button)
         directory_layout.addLayout(path_row)
-        self.location_list = QListWidget(directory_column)
+        self.location_list = QTreeWidget(directory_column)
+        self.location_list.setObjectName("libraryDirectoryList")
+        self.location_list.setColumnCount(3)
+        self.location_list.setHeaderLabels(["目录", "读取", "写入"])
+        self.location_list.setRootIsDecorated(False)
+        directory_header = self.location_list.header()
+        directory_header.setSectionResizeMode(0, QHeaderView.Stretch)
+        directory_header.setSectionResizeMode(1, QHeaderView.Fixed)
+        directory_header.setSectionResizeMode(2, QHeaderView.Fixed)
+        self.location_list.setColumnWidth(1, 42)
+        self.location_list.setColumnWidth(2, 42)
         self.location_list.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        self.location_list.setTextElideMode(Qt.ElideMiddle)
-        directory_layout.addWidget(self.location_list, 1)
+        self.location_list.setFixedHeight(250)
+        directory_layout.addWidget(self.location_list)
         library_locations = self.config.get("library_locations")
-        for path in library_locations if isinstance(library_locations, list) else []:
-            value = path.get("path") if isinstance(path, dict) else path
+        global_read = bool(self.config.get("library_allow_read", True))
+        global_write = bool(self.config.get("library_allow_write", False))
+        for entry in library_locations if isinstance(library_locations, list) else []:
+            value = entry.get("path") if isinstance(entry, dict) else entry
             if value:
-                self.location_list.addItem(str(value))
+                read = bool(entry.get("read", global_read)) if isinstance(entry, dict) else global_read
+                write = bool(entry.get("write", global_write)) if isinstance(entry, dict) else global_write
+                self.add_library_location_item(str(value), read=read, write=write)
 
-        self.allow_read_check = QCheckBox("允许读取", directory_column)
-        self.allow_read_check.setChecked(bool(self.config.get("library_allow_read", True)))
-        self.allow_write_check = QCheckBox("允许写入", directory_column)
-        self.allow_write_check.setChecked(bool(self.config.get("library_allow_write", False)))
-        self.library_index_check = QCheckBox("启用本地全文索引", directory_column)
+        self.library_index_check = SlidingToggle(directory_column, "启用本地全文索引")
         self.library_index_check.setChecked(bool(self.config.get("library_index_enabled", True)))
-        directory_layout.addWidget(self.allow_read_check)
-        directory_layout.addWidget(self.allow_write_check)
-        directory_layout.addWidget(self.library_index_check)
 
         directory_actions = QHBoxLayout()
         directory_actions.setContentsMargins(0, 0, 0, 0)
-        for text, secondary in (("添加目录", False), ("移除", True), ("保存权限", False), ("刷新文件", True), ("刷新索引", True)):
+        directory_actions.setSpacing(8)
+        for text in ("移除选择", "刷新文件"):
             button = QPushButton(text, directory_column)
-            if secondary:
-                button.setObjectName("secondaryButton")
-            if text == "添加目录":
-                button.clicked.connect(self.choose_library_directory)
-            elif text == "移除":
+            button.setObjectName("secondaryButton")
+            if text == "移除选择":
                 button.clicked.connect(self.remove_library_location)
-            elif text == "保存权限":
-                button.clicked.connect(self.save_library_locations)
-            elif text == "刷新文件":
-                button.clicked.connect(self.refresh_library_files)
             else:
-                self.refresh_library_index_button = button
-                button.clicked.connect(self.refresh_library_index_now)
+                button.clicked.connect(self.refresh_library_files)
             directory_actions.addWidget(button)
         directory_layout.addLayout(directory_actions)
-        self.library_index_status_label = QLabel(library_index_summary(self.config, self.workspace), directory_column)
-        self.library_index_status_label.setObjectName("modelSummary")
-        self.library_index_status_label.setWordWrap(True)
-        directory_layout.addWidget(self.library_index_status_label)
+        directory_layout.addStretch(1)
         body.addWidget(directory_column)
 
+        files_column = QWidget(panel)
+        files_column.setObjectName("libraryColumn")
+        files_layout = QVBoxLayout(files_column)
+        files_layout.setContentsMargins(0, 0, 0, 0)
+        files_layout.setSpacing(10)
+        file_title = QLabel("已索引文件", files_column)
+        file_title.setObjectName("libraryColumnTitle")
+        files_layout.addWidget(file_title)
+        self.file_list = QTreeWidget(files_column)
+        self.file_list.setObjectName("libraryFileList")
+        self.file_list.setColumnCount(3)
+        self.file_list.setHeaderLabels(["文件名", "大小", "更新时间"])
+        self.file_list.setRootIsDecorated(False)
+        self.file_list.setAlternatingRowColors(False)
+        self.file_list.setColumnWidth(0, 150)
+        self.file_list.setColumnWidth(1, 64)
+        self.file_list.header().setStretchLastSection(True)
+        self.file_list.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.file_list.itemClicked.connect(lambda item, _column: self.preview_library_file(item))
+        files_layout.addWidget(self.file_list, 1)
+        self.location_list.currentItemChanged.connect(lambda _current, _previous: self.refresh_library_files())
+        body.addWidget(files_column)
+
         preview_column = QWidget(panel)
+        preview_column.setObjectName("libraryPreviewColumn")
         preview_layout = QVBoxLayout(preview_column)
         preview_layout.setContentsMargins(0, 0, 0, 0)
-        preview_layout.setSpacing(8)
-        file_title = QLabel("舱内文件", preview_column)
-        file_title.setObjectName("sectionTitle")
-        preview_layout.addWidget(file_title)
-        self.file_list = QListWidget(preview_column)
-        self.file_list.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        self.file_list.setTextElideMode(Qt.ElideMiddle)
-        self.file_list.itemClicked.connect(self.preview_library_file)
-        preview_layout.addWidget(self.file_list, 1)
-        self.location_list.currentItemChanged.connect(lambda _current, _previous: self.refresh_library_files())
+        preview_layout.setSpacing(10)
         preview_title = QLabel("文件预览", preview_column)
-        preview_title.setObjectName("sectionTitle")
+        preview_title.setObjectName("libraryColumnTitle")
         preview_layout.addWidget(preview_title)
         self.file_preview = QTextBrowser(preview_column)
         self.file_preview.setObjectName("filePreview")
@@ -865,8 +1148,27 @@ class SettingsPanelMixin:
         self.file_preview.setLineWrapMode(QTextBrowser.WidgetWidth)
         preview_layout.addWidget(self.file_preview, 1)
         body.addWidget(preview_column)
-        body.setSizes([360, 520])
+        body.setSizes([340, 290, 330])
         layout.addWidget(body, 1)
+
+        footer = QWidget(panel)
+        footer.setObjectName("libraryFooter")
+        footer_layout = QHBoxLayout(footer)
+        footer_layout.setContentsMargins(0, 16, 0, 16)
+        footer_layout.setSpacing(12)
+        self.library_index_status_label = QLabel(library_index_summary(self.config, self.workspace), footer)
+        self.library_index_status_label.setObjectName("libraryIndexStatus")
+        self.library_index_status_label.setWordWrap(True)
+        self.refresh_library_index_button = QPushButton("刷新索引", footer)
+        self.refresh_library_index_button.setObjectName("secondaryButton")
+        self.refresh_library_index_button.clicked.connect(self.refresh_library_index_now)
+        save_button = QPushButton("保存更改", footer)
+        save_button.clicked.connect(self.save_library_locations)
+        footer_layout.addWidget(self.library_index_check)
+        footer_layout.addWidget(self.library_index_status_label, 1)
+        footer_layout.addWidget(self.refresh_library_index_button)
+        footer_layout.addWidget(save_button)
+        layout.addWidget(footer)
         self.refresh_library_files()
         return panel
 
@@ -878,11 +1180,39 @@ class SettingsPanelMixin:
         path = self.location_path_input.text().strip()
         if not path:
             return
-        if path in [self.location_list.item(index).text() for index in range(self.location_list.count())]:
+        if path in [entry["path"] for entry in self.library_location_values()]:
             self.location_path_input.clear()
             return
-        self.location_list.addItem(path)
+        self.add_library_location_item(path)
         self.location_path_input.clear()
+
+    def add_library_location_item(self, path: str, *, read: bool = True, write: bool = False) -> None:
+        name = Path(path).name or path
+        item = QTreeWidgetItem([f"{name}\n{path}", "", ""])
+        item.setData(0, Qt.UserRole, path)
+        item.setToolTip(0, path)
+        item.setSizeHint(0, QSize(0, 54))
+        self.location_list.addTopLevelItem(item)
+        for column, enabled in ((1, read), (2, write)):
+            toggle = SlidingToggle(self.location_list)
+            toggle.setChecked(enabled)
+            toggle.toggled.connect(self.refresh_library_files)
+            self.location_list.setItemWidget(item, column, toggle)
+
+    def library_location_values(self) -> list[dict[str, object]]:
+        values: list[dict[str, object]] = []
+        for index in range(self.location_list.topLevelItemCount()):
+            item = self.location_list.topLevelItem(index)
+            read_toggle = self.location_list.itemWidget(item, 1)
+            write_toggle = self.location_list.itemWidget(item, 2)
+            values.append(
+                {
+                    "path": str(item.data(0, Qt.UserRole) or ""),
+                    "read": isinstance(read_toggle, SlidingToggle) and read_toggle.isChecked(),
+                    "write": isinstance(write_toggle, SlidingToggle) and write_toggle.isChecked(),
+                }
+            )
+        return values
 
     def choose_library_directory(self) -> None:
         folder = QFileDialog.getExistingDirectory(self, "选择资料目录", str(Path.home()))
@@ -891,31 +1221,32 @@ class SettingsPanelMixin:
             self.add_library_location_from_input()
 
     def remove_library_location(self) -> None:
-        row = self.location_list.currentRow()
+        current = self.location_list.currentItem()
+        row = self.location_list.indexOfTopLevelItem(current) if current is not None else -1
         if row >= 0:
-            self.location_list.takeItem(row)
+            self.location_list.takeTopLevelItem(row)
 
     def save_library_locations(self) -> None:
-        locations = [self.location_list.item(index).text() for index in range(self.location_list.count())]
+        locations = self.library_location_values()
         self.config = {
             **self.config,
             "library_locations": locations,
-            "library_allow_read": self.allow_read_check.isChecked(),
-            "library_allow_write": self.allow_write_check.isChecked(),
+            "library_allow_read": any(bool(entry["read"]) for entry in locations),
+            "library_allow_write": any(bool(entry["write"]) for entry in locations),
             "library_index_enabled": self.library_index_check.isChecked(),
         }
         save_config(self.config, self.workspace)
         self.location_list.clearSelection()
-        self.location_list.setCurrentRow(-1)
         self.refresh_library_files()
         self.set_file_preview("目录和权限已保存。")
 
     def current_library_config(self) -> dict[str, object]:
+        locations = self.library_location_values()
         return {
             **self.config,
-            "library_locations": [self.location_list.item(index).text() for index in range(self.location_list.count())],
-            "library_allow_read": self.allow_read_check.isChecked(),
-            "library_allow_write": self.allow_write_check.isChecked(),
+            "library_locations": locations,
+            "library_allow_read": any(bool(entry["read"]) for entry in locations),
+            "library_allow_write": any(bool(entry["write"]) for entry in locations),
             "library_index_enabled": self.library_index_check.isChecked(),
         }
 
@@ -932,12 +1263,23 @@ class SettingsPanelMixin:
         if current is None:
             self.set_file_preview("请选择左侧资料目录。")
             return
+        read_toggle = self.location_list.itemWidget(current, 1)
+        if not isinstance(read_toggle, SlidingToggle) or not read_toggle.isChecked():
+            self.set_file_preview("当前目录未允许读取。")
+            return
         count = 0
-        for path in self.previewable_library_files(config, Path(current.text()).expanduser()):
-            item = QListWidgetItem(path.name)
-            item.setData(Qt.UserRole, str(path))
-            item.setToolTip(str(path))
-            self.file_list.addItem(item)
+        current_path = str(current.data(0, Qt.UserRole) or "")
+        for path in self.previewable_library_files(config, Path(current_path).expanduser()):
+            try:
+                stat = path.stat()
+                size = f"{stat.st_size / 1024:.1f} KB"
+                modified = datetime.fromtimestamp(stat.st_mtime).strftime("%m-%d %H:%M")
+            except OSError:
+                size, modified = "-", "-"
+            item = QTreeWidgetItem([path.name, size, modified])
+            item.setData(0, Qt.UserRole, str(path))
+            item.setToolTip(0, str(path))
+            self.file_list.addTopLevelItem(item)
             count += 1
         self.set_file_preview(f"已扫描 {count} 个可读取文件。聊天时只会按问题匹配少量片段作为上下文。")
 
@@ -964,8 +1306,8 @@ class SettingsPanelMixin:
         self.library_index_status_label.setText(f"{library_index_summary(config, self.workspace)}\n刷新失败: {error}")
         self.refresh_library_index_button.setEnabled(True)
 
-    def preview_library_file(self, item: QListWidgetItem) -> None:
-        raw_path = item.data(Qt.UserRole)
+    def preview_library_file(self, item: QTreeWidgetItem) -> None:
+        raw_path = item.data(0, Qt.UserRole)
         if not raw_path:
             return
         path = Path(str(raw_path))
@@ -993,21 +1335,6 @@ class SettingsPanelMixin:
                 continue
         return files
 
-    def model_summary(self) -> str:
-        profile = self.selected_profile_name()
-        status = self.openharness_profile_statuses().get(profile, {})
-        key_state = "已配置" if status.get("configured") else "未配置"
-        return "\n".join(
-            [
-                "供应源: OpenHarness",
-                f"Profile: {profile}",
-                f"模型: {self.current_model_text() or status.get('model') or 'provider 默认'}",
-                f"生图模型: {self.current_image_model_text() or '自动选择'}",
-                f"接口地址: {self.base_url_input.text().strip() or status.get('base_url') or 'provider 默认'}",
-                f"密钥: {key_state}",
-            ]
-        )
-
     def save_model_settings(self) -> None:
         profile = self.selected_profile_name()
         model = self.model_input.currentText().strip()
@@ -1025,7 +1352,7 @@ class SettingsPanelMixin:
                 manager.store_profile_credential(profile, "api_key", key)
                 self.api_key_input.clear()
         except Exception as error:
-            self.model_status_label.setText(f"{self.model_summary()}\n保存 OpenHarness profile 失败: {type(error).__name__}: {error}")
+            self.model_status_label.setText(f"保存失败: {type(error).__name__}: {error}")
             return
         self.config = {
             **self.config,
@@ -1036,7 +1363,9 @@ class SettingsPanelMixin:
         }
         save_config(self.config, self.workspace)
         self.apply_runtime_config()
-        self.model_status_label.setText(f"{self.model_summary()}\n已保存并应用。")
+        self.refresh_chat_model_selector()
+        self.update_model_connection_state()
+        self.model_status_label.setText("已保存并应用。")
 
     def current_model_text(self) -> str:
         return self.model_input.currentText().strip()
@@ -1049,6 +1378,45 @@ class SettingsPanelMixin:
         if profile_obj is None:
             return []
         return [model for model in [profile_obj.last_model, profile_obj.default_model, *profile_obj.allowed_models] if model]
+
+    def refresh_chat_model_selector(self) -> None:
+        if not hasattr(self, "chat_model_selector"):
+            return
+        current = str(self.config.get("model") or self.current_profile_model() or "").strip()
+        models = list(dict.fromkeys([*self.current_profile_models(), current]))
+        selector = self.chat_model_selector
+        was_blocked = selector.blockSignals(True)
+        selector.clear()
+        selector.addItems([model for model in models if model])
+        selector.setCurrentText(current)
+        selector.setToolTip(current or "未选择模型")
+        selector.blockSignals(was_blocked)
+
+    def select_chat_model(self, model: str) -> None:
+        model = model.strip()
+        if not model or model == str(self.config.get("model") or "").strip():
+            return
+        profile = self.selected_profile_name()
+        try:
+            manager = AuthManager()
+            manager.use_profile(profile)
+            manager.update_profile(profile, last_model=model)
+        except Exception as error:
+            self.refresh_chat_model_selector()
+            if hasattr(self, "set_status_text"):
+                self.set_status_text(f"切换模型失败: {type(error).__name__}: {error}")
+            return
+        self.config = {**self.config, "provider_profile": profile, "model": model}
+        save_config(self.config, self.workspace)
+        if hasattr(self, "model_input"):
+            if self.model_input.findText(model) < 0:
+                self.model_input.addItem(model)
+            self.model_input.setCurrentText(model)
+        self.apply_runtime_config()
+        self.refresh_chat_model_selector()
+        self.update_model_connection_state()
+        if hasattr(self, "set_status_text"):
+            self.set_status_text(f"已切换到 {model}")
 
     def populate_image_model_input(self, models: list[str], current: str) -> None:
         self.image_model_input.clear()
@@ -1069,7 +1437,7 @@ class SettingsPanelMixin:
         api_key = profile_api_key(profile, profile_obj, self.api_key_input.text().strip())
         fallback = [model for model in [profile_obj.last_model, profile_obj.default_model, *profile_obj.allowed_models] if model]
         self.load_models_button.setEnabled(False)
-        self.model_status_label.setText(f"{self.model_summary()}\n正在同步模型列表...")
+        self.model_status_label.setText("正在同步模型列表...")
         started = self.start_settings_task(
             "model_sync",
             lambda: self.fetch_profile_models(base_url, api_key, fallback),
@@ -1096,7 +1464,7 @@ class SettingsPanelMixin:
         models, fallback, remote_models, message = result
         if profile != self.selected_profile_name():
             self.load_models_button.setEnabled(True)
-            self.model_status_label.setText(f"{self.model_summary()}\nProfile 已切换，本次同步结果已忽略。")
+            self.model_status_label.setText("Profile 已切换，本次同步结果已忽略。")
             return
         if remote_models:
             try:
@@ -1113,8 +1481,9 @@ class SettingsPanelMixin:
         if current:
             self.model_input.setCurrentText(current)
         self.populate_image_model_input(models, current_image)
-        self.model_status_label.setText(f"{self.model_summary()}\n{message}")
+        self.model_status_label.setText(message)
         self.load_models_button.setEnabled(True)
+        self.refresh_chat_model_selector()
 
     def fail_model_sync(self, profile: str, fallback: list[str], error: str) -> None:
         self.apply_model_sync(
@@ -1126,7 +1495,24 @@ class SettingsPanelMixin:
         self.save_model_settings()
         status = self.openharness_profile_statuses().get(self.selected_profile_name(), {})
         state = "可用" if status.get("configured") else "未配置"
-        self.model_status_label.setText(f"{self.model_summary()}\nOpenHarness profile {state}。")
+        self.update_model_connection_state()
+        self.model_status_label.setText(f"连接测试: OpenHarness profile {state}。")
+
+    def update_model_connection_state(self) -> None:
+        if not hasattr(self, "model_connection_state_label"):
+            return
+        status = self.openharness_profile_statuses().get(self.selected_profile_name(), {})
+        connected = bool(status.get("configured"))
+        self.model_connection_state_label.setText("● 正常" if connected else "● 未配置")
+        self.model_status_primary_label.setText("✓ 已连接" if connected else "尚未连接")
+        values = {
+            "model": self.current_model_text() or str(status.get("model") or "provider 默认"),
+            "provider": str(status.get("label") or self.selected_profile_name()),
+            "base_url": self.base_url_input.text().strip() or str(status.get("base_url") or "provider 默认"),
+            "credential": "已配置" if connected else "未配置",
+        }
+        for key, value in values.items():
+            self.model_status_value_labels[key].setText(value)
 
     def openharness_profile_statuses(self) -> dict[str, object]:
         try:

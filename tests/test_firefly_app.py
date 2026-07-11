@@ -35,10 +35,10 @@ from firefly.context import (
 )
 from firefly import desktop_tools as desktop_tools_module
 from firefly.desktop_tools import DesktopScreenshotInput, DesktopScreenshotTool, DesktopWindowInput, DesktopWindowTool
-from firefly.desktop.chat_rendering import chat_bubble_colors, format_chat_text, render_chat_inline
-from firefly.desktop.chat_window import conversation_title, local_file_paths_from_mime_data, local_permission_mode_command, remove_temporary_context_snapshot, reply_image_paths, strip_generated_image_notice
+from firefly.desktop.chat_rendering import ChatBubble, chat_bubble_colors, format_chat_text, render_chat_html, render_chat_inline
+from firefly.desktop.chat_window import ModelSelector, chat_bubble_max_width, conversation_title, local_file_paths_from_mime_data, local_permission_mode_command, remove_temporary_context_snapshot, reply_image_paths, strip_generated_image_notice
 from firefly.desktop.music import DEFAULT_STARFIRE_SONG, DEFAULT_STARFIRE_SONG_URL, starfire_music_tracks
-from firefly.desktop.settings_panel import SettingsPanelMixin, fetch_openai_compatible_models
+from firefly.desktop.settings_panel import SettingsComboBox, SettingsPanelMixin, SlidingToggle, fetch_openai_compatible_models
 from firefly.desktop.styles import chat_style_for_mode, chat_viewport_style_for_mode, normalized_theme_mode
 from firefly.desktop.workers import ChatWorker, TaskWorker
 from firefly.desktop_awareness import DesktopSnapshot, select_snapshot_window, snapshot_prompt
@@ -110,6 +110,115 @@ def test_firefly_model_sync_uses_profile_fallback_on_fetch_error(monkeypatch) ->
     assert fallback == ["fallback-model"]
     assert remote is False
     assert "RuntimeError: offline" in message
+
+
+def test_firefly_chat_model_selector_switches_profile_and_runtime(monkeypatch) -> None:
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    from PySide6.QtWidgets import QApplication, QComboBox
+
+    app = QApplication.instance() or QApplication([])
+    persisted: list[dict[str, object]] = []
+
+    class FakeAuthManager:
+        profile = SimpleNamespace(last_model="steady", default_model="steady", allowed_models=["swift"])
+
+        def list_profiles(self):
+            return {"demo": self.profile}
+
+        def use_profile(self, profile: str) -> None:
+            assert profile == "demo"
+
+        def update_profile(self, profile: str, **changes: object) -> None:
+            assert profile == "demo"
+            for key, value in changes.items():
+                setattr(self.profile, key, value)
+
+    class Host(SettingsPanelMixin):
+        def __init__(self) -> None:
+            self.config: dict[str, object] = {"provider_profile": "demo", "model": "steady"}
+            self.workspace = Path(".")
+            self.chat_model_selector = QComboBox()
+            self.model_input = QComboBox()
+            self.runtime_updates = 0
+            self.status = ""
+
+        def selected_profile_name(self) -> str:
+            return "demo"
+
+        def current_profile_model(self) -> str:
+            return FakeAuthManager.profile.last_model
+
+        def openharness_profile_statuses(self) -> dict[str, object]:
+            return {"demo": {"configured": True}}
+
+        def apply_runtime_config(self) -> None:
+            self.runtime_updates += 1
+
+        def set_status_text(self, text: str) -> None:
+            self.status = text
+
+    monkeypatch.setattr("firefly.desktop.settings_panel.AuthManager", FakeAuthManager)
+    monkeypatch.setattr("firefly.desktop.settings_panel.save_config", lambda config, _workspace: persisted.append(dict(config)))
+    host = Host()
+    try:
+        host.refresh_chat_model_selector()
+
+        assert [host.chat_model_selector.itemText(index) for index in range(host.chat_model_selector.count())] == ["steady", "swift"]
+        host.select_chat_model("swift")
+
+        assert FakeAuthManager.profile.last_model == "swift"
+        assert host.config["model"] == "swift"
+        assert host.model_input.currentText() == "swift"
+        assert host.runtime_updates == 1
+        assert persisted[-1]["model"] == "swift"
+        assert host.status == "已切换到 swift"
+    finally:
+        host.chat_model_selector.deleteLater()
+        host.model_input.deleteLater()
+        app.processEvents()
+
+
+def test_firefly_light_theme_model_popup_is_not_dark() -> None:
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    from PySide6.QtWidgets import QApplication
+
+    app = QApplication.instance() or QApplication([])
+    selector = ModelSelector()
+    selector.addItems(["steady", "swift"])
+    selector.setStyleSheet(chat_style_for_mode("light"))
+    selector.show()
+    selector.showPopup()
+    app.processEvents()
+    try:
+        assert selector.view().viewport().grab().toImage().pixelColor(5, 5).lightness() > 150
+        assert "#172520" in selector.view().styleSheet()
+        selector.hidePopup()
+        selector.setProperty("darkTheme", True)
+        selector.showPopup()
+        app.processEvents()
+        assert "#ecf8f5" in selector.view().styleSheet()
+    finally:
+        selector.hidePopup()
+        selector.deleteLater()
+        app.processEvents()
+
+
+def test_firefly_permission_toggle_draws_a_moving_knob() -> None:
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    from PySide6.QtWidgets import QApplication
+
+    app = QApplication.instance() or QApplication([])
+    toggle = SlidingToggle()
+    toggle.setChecked(True)
+    toggle.show()
+    app.processEvents()
+    try:
+        image = toggle.grab().toImage()
+        assert image.pixelColor(27, 11).lightness() > 220
+        assert image.pixelColor(9, 11).green() > image.pixelColor(9, 11).red()
+    finally:
+        toggle.deleteLater()
+        app.processEvents()
 
 
 def test_firefly_live2d_manifest_is_complete() -> None:
@@ -361,12 +470,33 @@ def test_firefly_plain_chat_text_hides_common_markdown_marks() -> None:
     assert text == "外观\n- 眼睛：蓝粉渐变\n- 按 Win + Tab 打开"
 
 
-def test_firefly_chat_messages_use_plain_text_labels() -> None:
+def test_firefly_chat_messages_render_markdown_as_rich_text() -> None:
     text = (Path(__file__).resolve().parents[1] / "firefly" / "desktop" / "chat_window.py").read_text(encoding="utf-8")
 
-    assert "body = QLabel(format_chat_text(display_text), bubble)" in text
-    assert "body.setTextFormat(Qt.PlainText)" in text
-    assert "render_chat_html(text)" not in text
+    assert "render_chat_html(" in text
+    assert "body.setTextFormat(Qt.RichText)" in text
+    assert "body.setOpenExternalLinks(True)" in text
+
+
+def test_firefly_chat_html_preserves_markdown_blocks() -> None:
+    rendered = render_chat_html("## 标题\n\n- **重点**\n\n```python\nprint('ok')\n```")
+
+    assert "标题" in rendered
+    assert "<b>重点</b>" in rendered
+    assert "<pre" in rendered
+    assert "print(&#x27;ok&#x27;)" in rendered
+
+
+def test_firefly_single_line_chat_html_has_no_paragraph_margin() -> None:
+    rendered = render_chat_html("哈喽")
+
+    assert "<p" not in rendered
+    assert "哈喽" in rendered
+
+
+def test_firefly_chat_bubbles_scale_with_window_width() -> None:
+    assert chat_bubble_max_width(860) == 559
+    assert chat_bubble_max_width(1920) == 1248
 
 
 def test_firefly_conversation_title_stays_single_line() -> None:
@@ -456,8 +586,58 @@ def test_firefly_chat_window_opens_saved_conversation() -> None:
             assert not window.findChildren(QLabel, "chatStatusMessage")
             assert window.conversation_list.horizontalScrollBarPolicy() == Qt.ScrollBarAlwaysOff
             assert window.main_splitter.count() == 2
+            assert window.nav_collapsed is True
+            assert window.nav_bar.maximumWidth() == 54
+            assert isinstance(window.chat_model_selector, ModelSelector)
+            window.toggle_nav_bar()
+            app.processEvents()
+            assert window.settings_nav_button.geometry().right() < window.nav_bar.contentsRect().right()
             assert window.file_card_widget(str(Path(tmp) / "answer.txt"), is_user=False).findChildren(QLabel, "speakerAvatarAssistant")
+            assert window.file_list.columnCount() == 3
+            assert all(not button.icon().isNull() for button in window.settings_buttons)
+            assert isinstance(window.desktop_control_enabled_check, SlidingToggle)
+            assert isinstance(window.theme_mode_input, SettingsComboBox)
+            assert isinstance(window.web_search_enabled_check, SlidingToggle)
+            assert isinstance(window.memory_enabled_check, SlidingToggle)
+            assert isinstance(window.skills_enabled_check, SlidingToggle)
+            assert isinstance(window.library_index_check, SlidingToggle)
+            window.add_library_location_item("C:/library", read=True, write=False)
+            directory_item = window.location_list.topLevelItem(0)
+            assert isinstance(window.location_list.itemWidget(directory_item, 1), SlidingToggle)
+            assert isinstance(window.location_list.itemWidget(directory_item, 2), SlidingToggle)
+            assert [button.objectName() for button in window.permission_mode_buttons.values()] == [
+                "permissionModeFirst",
+                "permissionModeMiddle",
+                "permissionModeLast",
+            ]
         finally:
+            window.deleteLater()
+            app.processEvents()
+
+
+def test_firefly_assistant_avatar_aligns_with_bubble_tail() -> None:
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    from PySide6.QtWidgets import QApplication, QLabel
+
+    from firefly.desktop.chat_window import ChatWindow
+    from firefly.runtime import FireflyRuntime
+
+    app = QApplication.instance() or QApplication([])
+    with TemporaryDirectory() as tmp:
+        workspace = initialize_workspace(Path(tmp) / ".firefly")
+        window = ChatWindow(FireflyRuntime(cwd=tmp, workspace=workspace), workspace)
+        try:
+            window.resize(900, 680)
+            window.show()
+            window.append_message("assistant", "第一行\n第二行\n第三行")
+            app.processEvents()
+            avatar = window.findChildren(QLabel, "speakerAvatarAssistant")[-1]
+            bubble = window.findChildren(ChatBubble)[-1]
+
+            assert avatar.parentWidget() is bubble.parentWidget()
+            assert avatar.geometry().bottom() == bubble.geometry().bottom()
+        finally:
+            window.close()
             window.deleteLater()
             app.processEvents()
 
@@ -1155,6 +1335,11 @@ def test_firefly_library_write_allowlist() -> None:
         assert library_write_allowed(docs / "note.md", config, workspace)
         assert not library_write_allowed(root / "outside.md", config, workspace)
         assert not library_write_allowed(docs / "note.md", {**config, "library_allow_write": False}, workspace)
+        assert not library_write_allowed(
+            docs / "note.md",
+            {**config, "library_locations": [{"path": str(docs), "read": True, "write": False}]},
+            workspace,
+        )
         permission_context = build_permission_context(config, workspace)
 
         assert "Firefly library write allowlist" in permission_context
