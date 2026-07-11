@@ -1,6 +1,6 @@
-"""Real large tasks testing ALL merged PR features on AutoAgent codebase.
+"""Real large tasks testing all merged PR features on a configured codebase.
 
-Every test runs on /home/tangjiabin/AutoAgent — a 17K LOC unfamiliar Python project.
+Set ``OPENHARNESS_REAL_TEST_WORKSPACE`` to the target project directory.
 Uses real Kimi K2.5 API via both Anthropic and OpenAI endpoints.
 
 Run: python tests/test_merged_prs_on_autoagent.py
@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import shlex
 import sys
 import tempfile
 import time
@@ -17,14 +18,12 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
-API_KEY = os.environ.get(
-    "ANTHROPIC_API_KEY",
-    "sk-Ue1kdhq9prvNwuwySlzRtWVD7ek0iJJaHyPdKDa3ecKLwYuG",
-)
-ANTHROPIC_BASE = "https://api.moonshot.cn/anthropic"
-OPENAI_BASE = "https://api.moonshot.cn/v1"
-MODEL = "kimi-k2.5"
-WORKSPACE = Path("/home/tangjiabin/AutoAgent")
+API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
+ANTHROPIC_BASE = os.environ.get("ANTHROPIC_BASE_URL", "https://api.moonshot.cn/anthropic")
+OPENAI_BASE = os.environ.get("OPENAI_BASE_URL", "https://api.moonshot.cn/v1")
+MODEL = os.environ.get("ANTHROPIC_MODEL", "kimi-k2.5")
+_WORKSPACE_ENV = os.environ.get("OPENHARNESS_REAL_TEST_WORKSPACE", "")
+WORKSPACE = Path(_WORKSPACE_ENV).expanduser() if _WORKSPACE_ENV else Path("__missing_real_test_workspace__")
 
 RESULTS: dict[str, tuple[bool, float]] = {}
 
@@ -430,11 +429,11 @@ async def task_cron_autoagent_maintenance():
             # Create maintenance jobs for AutoAgent
             jobs_data = [
                 {"name": "lint-autoagent", "schedule": "0 */6 * * *",
-                 "command": "cd /home/tangjiabin/AutoAgent && ruff check autoagent/"},
+                 "command": f"cd {shlex.quote(str(WORKSPACE))} && ruff check autoagent/"},
                 {"name": "test-autoagent", "schedule": "0 2 * * *",
-                 "command": "cd /home/tangjiabin/AutoAgent && python -m pytest tests/ -q"},
+                 "command": f"cd {shlex.quote(str(WORKSPACE))} && python -m pytest tests/ -q"},
                 {"name": "count-todos", "schedule": "0 9 * * 1",
-                 "command": "cd /home/tangjiabin/AutoAgent && grep -r TODO autoagent/ | wc -l"},
+                 "command": f"cd {shlex.quote(str(WORKSPACE))} && grep -r TODO autoagent/ | wc -l"},
                 {"name": "disk-cleanup", "schedule": "0 3 * * 0",
                  "command": "find /tmp -name '*.pyc' -mtime +7 -delete"},
             ]
@@ -582,7 +581,7 @@ type: project
             upsert_cron_job({
                 "name": "autoagent-lint",
                 "schedule": "0 */4 * * *",
-                "command": "cd /home/tangjiabin/AutoAgent && ruff check autoagent/",
+                "command": f"cd {shlex.quote(str(WORKSPACE))} && ruff check autoagent/",
             })
             cron_jobs = load_cron_jobs()
             print(f"    Cron jobs: {[j['name'] for j in cron_jobs]}")

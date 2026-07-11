@@ -23,14 +23,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 from openharness.config.settings import Settings
 
-API_KEY = os.environ.get(
-    "ANTHROPIC_API_KEY",
-    "sk-Ue1kdhq9prvNwuwySlzRtWVD7ek0iJJaHyPdKDa3ecKLwYuG",
-)
+API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 BASE_URL = os.environ.get("ANTHROPIC_BASE_URL", "https://api.moonshot.cn/anthropic")
 MODEL = os.environ.get("ANTHROPIC_MODEL", "kimi-k2.5")
-WORKSPACE = Path("/home/tangjiabin/AutoAgent")
-_SKIP_REAL_API = not WORKSPACE.exists() or not API_KEY
+_WORKSPACE_ENV = os.environ.get("OPENHARNESS_REAL_TEST_WORKSPACE", "")
+WORKSPACE = Path(_WORKSPACE_ENV).expanduser() if _WORKSPACE_ENV else Path("__missing_real_test_workspace__")
+_SKIP_REAL_API = not API_KEY or not _WORKSPACE_ENV or not WORKSPACE.exists()
 DEFAULT_MAX_TURNS = Settings().max_turns
 
 RESULTS: dict[str, bool] = {}
