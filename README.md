@@ -12,7 +12,7 @@ This is an unofficial fan-made project, not an official HoYoverse application or
 
 - Live2D desktop companion with chat and interaction
 - Firefly-inspired persona and configurable conversation behavior
-- Session history and optional long-term memory
+- Session history and optional long-term memory through EverOS
 - File upload, document reading, local library indexing, and summaries
 - Optional web search for current external information
 - Skills, model profiles, and permission settings
@@ -53,10 +53,18 @@ tests/                    OpenHarness and Firefly tests
 
 Firefly Agent is designed as a companion first and a tool second. The Live2D character, tone, memory, and interaction should feel present and personal; file handling, search, skills, and task execution exist to make that companionship useful in everyday work and study.
 
+## Memory Experience
+
+Firefly Agent can connect to [EverOS](https://github.com/EverMind-AI/EverOS) as its long-term memory service. EverOS helps store and retrieve user-approved preferences, facts, and conversation context across sessions. This makes the companion more continuous: Firefly can better remember how the user likes to interact, pick up previous topics, and provide responses that feel less like a fresh chat every time.
+
+EverOS is optional. When it is unavailable, Firefly Agent can fall back to local memory and session storage according to the configured settings.
+
 ## Attribution
 
 - Live2D and bundled resource attribution: [firefly/assets/ATTRIBUTION.md](firefly/assets/ATTRIBUTION.md)
 - Agent infrastructure: [OpenHarness](https://github.com/HKUDS/OpenHarness)
+- Long-term memory service: [EverOS](https://github.com/EverMind-AI/EverOS)
+- Firefly persona reference: [HeartEase1/firefly-skill](https://github.com/HeartEase1/firefly-skill)
 - Character inspiration: Firefly from *Honkai: Star Rail*
 
 Please review the attribution and license files before redistributing bundled assets.

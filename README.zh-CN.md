@@ -12,7 +12,7 @@ English: [README.md](README.md)
 
 - Live2D 桌面陪伴、聊天与互动
 - 以流萤为灵感的人格表达和可配置对话行为
-- 历史会话保存与可选长期记忆
+- 通过 EverOS 提供历史会话保存与可选长期记忆
 - 文件上传、文档读取、本地资料索引和内容总结
 - 可选联网检索，获取外部最新信息
 - 技能库、模型接口和权限设置
@@ -53,10 +53,18 @@ tests/                    OpenHarness 与 Firefly 测试
 
 Firefly Agent 的定位是“陪伴优先，工具辅助”。Live2D 形象、说话方式、长期记忆和互动体验应该让用户感到自然、亲近和连续；文件处理、联网、技能和任务执行，则负责让这份陪伴在学习、工作和日常使用中真正有帮助。
 
+## 记忆体验
+
+Firefly Agent 可以接入 [EverOS](https://github.com/EverMind-AI/EverOS) 作为长期记忆服务。EverOS 能够保存并检索用户主动允许保留的偏好、事实和对话上下文，让流萤在不同会话之间更好地承接内容。
+
+接入 EverOS 后，流萤可以更自然地记住用户的互动习惯、延续之前聊过的话题，并根据已有记忆提供更贴合的回应。这样能减少每次重新介绍背景的重复感，让长期陪伴体验更加连贯。EverOS 不是强制依赖；当服务不可用时，项目会根据配置降级到本地记忆和会话存储。
+
 ## 参考与归属
 
 - Live2D 和项目内资源归属：[firefly/assets/ATTRIBUTION.md](firefly/assets/ATTRIBUTION.md)
 - Agent 底层框架：[OpenHarness](https://github.com/HKUDS/OpenHarness)
+- 长期记忆项目：[EverOS](https://github.com/EverMind-AI/EverOS)
+- 流萤人设参考项目：[HeartEase1/firefly-skill](https://github.com/HeartEase1/firefly-skill)
 - 角色灵感：《崩坏：星穹铁道》中的流萤
 
 重新发布项目或内置资源前，请先确认归属说明和许可证要求。
