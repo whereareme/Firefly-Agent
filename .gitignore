@@ -29,9 +29,19 @@ frontend/terminal/node_modules/
 
 # User data (never commit API keys or session data)
 .openharness/
+.firefly/
+.agents/
+.codex/
+.claude/.credentials.json
+.git-credentials
+.netrc
 react_tui_smoke.txt
+generated_images/
+screenshots/
+logs/
+*.log
+gcm-diagnose.log
 
 # OS
 .DS_Store
 Thumbs.db
-uv.lock

@@ -39,6 +39,12 @@ On Windows, you can also run:
 
 `firefly check` validates the workspace, persona data, Live2D assets, Qt dependencies, document support, resource attribution, and lockfile before launch.
 
+## Configuration and Privacy
+
+API keys, custom model Base URLs, EverOS service addresses, conversations, memory, screenshots, and generated files are local configuration. They should be entered on the user's machine and are not part of this repository. The repository only contains non-secret provider defaults and the local EverOS fallback address used when the memory service is enabled.
+
+Before publishing a fork, verify that `.env`, `.openharness/`, `.firefly/`, `screenshots/`, `logs/`, generated files, and personal workspace data are not staged.
+
 ## Project Layout
 
 ```text
