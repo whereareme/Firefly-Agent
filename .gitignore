@@ -42,6 +42,8 @@ screenshots/
 logs/
 *.log
 gcm-diagnose.log
+autopilot-dashboard/public/snapshot.json
+docs/autopilot/snapshot.json
 
 # OS
 .DS_Store
