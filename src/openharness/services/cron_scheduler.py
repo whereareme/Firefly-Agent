@@ -33,11 +33,6 @@ from openharness.services.cron import (
 from openharness.sandbox import SandboxUnavailableError
 from openharness.utils.shell import create_shell_subprocess
 
-try:
-    from ohmo.gateway.config import load_gateway_config
-except Exception:  # pragma: no cover - ohmo is optional for non-ohmo cron users
-    load_gateway_config = None  # type: ignore[assignment]
-
 
 NOTIFICATION_OUTPUT_LIMIT = 3500
 
@@ -292,10 +287,11 @@ def _command_for_job(job: dict[str, Any]) -> str:
     if not message:
         raise ValueError("agent_turn cron job is missing payload.message")
     cwd = str(job.get("cwd") or ".")
-    parts = ["ohmo"]
+    runner = str(payload.get("runner") or job.get("runner") or "ohmo").strip()
+    if not runner:
+        raise ValueError("agent_turn cron job has an empty runner")
+    parts = [runner]
     profile = payload.get("profile") or job.get("provider_profile")
-    if profile is None and load_gateway_config is not None:
-        profile = load_gateway_config().provider_profile
     if profile:
         parts.extend(["--profile", str(profile)])
     parts.extend(

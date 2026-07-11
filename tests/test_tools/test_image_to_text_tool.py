@@ -35,6 +35,9 @@ from openharness.tools.image_to_text_tool import ImageToTextTool, ImageToTextToo
         # Google Gemini
         ("gemini-2.5-flash", True),
         ("gemini-2.0-flash", True),
+        ("gemini-3.1-pro", True),
+        ("gemini-3.1-pro-preview", True),
+        ("Gemini3.1pro", True),
         ("gemini-pro-vision", True),
         # Qwen VL
         ("qwen-vl-max", True),
@@ -66,6 +69,7 @@ from openharness.tools.image_to_text_tool import ImageToTextTool, ImageToTextToo
         ("anthropic/claude-sonnet-4-6", True),
         ("openai/gpt-4o", True),
         ("openai/gpt-4", False),
+        ("google/gemini-3.1-pro", True),
     ],
 )
 def test_is_model_multimodal(model: str, expected: bool) -> None:

@@ -26,6 +26,7 @@ from openharness.api.copilot_auth import (
 )
 from openharness.api.errors import AuthenticationFailure
 from openharness.api.openai_client import OpenAICompatibleClient
+from openharness.version import __version__
 
 log = logging.getLogger(__name__)
 
@@ -33,7 +34,7 @@ log = logging.getLogger(__name__)
 # Header constants
 # ---------------------------------------------------------------------------
 
-_VERSION = "0.1.0"  # OpenHarness version for User-Agent
+_VERSION = __version__
 
 # Default model for Copilot requests when the configured model is not
 # available in the Copilot model catalog.

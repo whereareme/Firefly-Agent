@@ -463,6 +463,8 @@ def main(
 
     cwd_path = str(Path(cwd).resolve())
     workspace_root = initialize_workspace(workspace)
+    if profile is None:
+        profile = load_gateway_config(workspace_root).provider_profile
     backend = OhmoSessionBackend(workspace_root)
     restore_messages = None
     restore_tool_metadata = None

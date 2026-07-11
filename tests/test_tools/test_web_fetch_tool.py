@@ -73,6 +73,52 @@ async def test_web_search_tool_reads_results(tmp_path, monkeypatch):
     assert "openharness docs" in result.output
 
 
+@pytest.mark.asyncio
+async def test_web_search_tool_falls_back_to_bing_html(tmp_path, monkeypatch):
+    calls: list[str] = []
+
+    async def fake_fetch(url: str, **kwargs: object) -> httpx.Response:
+        calls.append(url)
+        if "bing.com" not in url:
+            raise httpx.ConnectTimeout("")
+        request = httpx.Request("GET", url, params=kwargs.get("params"))
+        body = (
+            '<html><body><li class="b_algo">'
+            '<h2><a href="https://example.com/bing">Bing Result</a></h2>'
+            "<p>Fallback search worked.</p>"
+            "</li></body></html>"
+        )
+        return httpx.Response(200, text=body, request=request)
+
+    monkeypatch.setitem(WebSearchTool.execute.__globals__, "fetch_public_http_response", fake_fetch)
+
+    result = await WebSearchTool().execute(
+        WebSearchToolInput(query="openharness docs"),
+        ToolExecutionContext(cwd=tmp_path),
+    )
+
+    assert result.is_error is False
+    assert "Bing Result" in result.output
+    assert "Fallback search worked" in result.output
+    assert calls[-1] == "https://www.bing.com/search"
+
+
+@pytest.mark.asyncio
+async def test_web_search_tool_reports_blank_exception_type(tmp_path, monkeypatch):
+    async def fake_fetch(url: str, **_: object) -> httpx.Response:
+        raise httpx.ConnectError("")
+
+    monkeypatch.setitem(WebSearchTool.execute.__globals__, "fetch_public_http_response", fake_fetch)
+
+    result = await WebSearchTool().execute(
+        WebSearchToolInput(query="openharness docs"),
+        ToolExecutionContext(cwd=tmp_path),
+    )
+
+    assert result.is_error is True
+    assert result.output == "web_search failed: ConnectError; ConnectError; ConnectError"
+
+
 def test_html_to_text_handles_large_html_quickly():
     html = "<html><head><style>.x{color:red}</style><script>var x=1;</script></head><body>"
     html += ("<div><span>Issue item</span><a href='/x'>link</a></div>" * 6000)

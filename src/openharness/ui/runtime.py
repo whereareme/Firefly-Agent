@@ -40,7 +40,7 @@ from openharness.plugins import load_plugins
 from openharness.prompts import build_runtime_system_prompt
 from openharness.state import AppState, AppStateStore
 from openharness.services.session_backend import DEFAULT_SESSION_BACKEND, SessionBackend
-from openharness.tools import ToolRegistry, create_default_tool_registry
+from openharness.tools import BaseTool, ToolRegistry, create_default_tool_registry
 from openharness.keybindings import load_keybindings
 
 PermissionPrompt = Callable[[str, str], Awaitable[bool]]
@@ -49,6 +49,7 @@ EditApprovalPrompt = Callable[[str, str, int, int], Awaitable[str]]
 SystemPrinter = Callable[[str], Awaitable[None]]
 StreamRenderer = Callable[[StreamEvent], Awaitable[None]]
 ClearHandler = Callable[[], Awaitable[None]]
+SettingsTransform = Callable[[Any], Any]
 
 
 def _resolve_image_generation_config(settings) -> dict[str, str]:
@@ -297,6 +298,8 @@ async def build_runtime(
     memory_backend: MemoryCommandBackend | None = None,
     include_project_memory: bool = True,
     autodream_context: dict[str, object] | None = None,
+    settings_transform: SettingsTransform | None = None,
+    extra_tools: Iterable[BaseTool] | None = None,
 ) -> RuntimeBundle:
     """Build the shared runtime for an OpenHarness session."""
     settings_overrides: dict[str, Any] = {
@@ -311,6 +314,8 @@ async def build_runtime(
         "permission_mode": permission_mode,
     }
     settings = load_settings().merge_cli_overrides(**settings_overrides)
+    if settings_transform is not None:
+        settings = settings_transform(settings)
     cwd = str(Path(cwd).expanduser().resolve()) if cwd else str(Path.cwd())
     normalized_skill_dirs = tuple(str(Path(path).expanduser().resolve()) for path in (extra_skill_dirs or ()))
     normalized_plugin_roots = tuple(str(Path(path).expanduser().resolve()) for path in (extra_plugin_roots or ()))
@@ -327,6 +332,8 @@ async def build_runtime(
         if plugin.enabled and plugin.tools:
             for tool in plugin.tools:
                 tool_registry.register(tool)
+    for tool in extra_tools or ():
+        tool_registry.register(tool)
     provider = detect_provider(settings)
     bridge_manager = get_bridge_manager()
     app_state = AppStateStore(

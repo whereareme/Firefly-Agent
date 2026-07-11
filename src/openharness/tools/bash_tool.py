@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import re
 from pathlib import Path
 from typing import Iterable
 
@@ -40,6 +41,9 @@ class BashTool(BaseTool):
                 is_error=True,
                 metadata={"interactive_required": True},
             )
+        sleep_timeout = _preflight_sleep_timeout(arguments.command, arguments.timeout_seconds)
+        if sleep_timeout is not None:
+            return sleep_timeout
         process: asyncio.subprocess.Process | None = None
         try:
             process = await create_shell_subprocess(
@@ -90,7 +94,10 @@ async def _terminate_process(process: asyncio.subprocess.Process, *, force: bool
         return
     if force:
         process.kill()
-        await process.wait()
+        try:
+            await asyncio.wait_for(process.wait(), timeout=2.0)
+        except asyncio.TimeoutError:
+            pass
         return
     process.terminate()
     try:
@@ -161,6 +168,23 @@ def _preflight_interactive_command(command: str) -> str | None:
         "The bash tool is non-interactive, so it cannot answer installer/scaffold prompts live. "
         "Prefer non-interactive flags (for example --yes, -y, --skip-install, --defaults, --non-interactive), "
         "or run the scaffolding step once in an external terminal before asking the agent to continue."
+    )
+
+
+def _preflight_sleep_timeout(command: str, timeout_seconds: int) -> ToolResult | None:
+    match = re.fullmatch(r"\s*sleep\s+(\d+(?:\.\d+)?)\s*", command)
+    if not match:
+        return None
+    try:
+        duration = float(match.group(1))
+    except ValueError:
+        return None
+    if duration <= timeout_seconds:
+        return None
+    return ToolResult(
+        output=_format_timeout_output(bytearray(), command=command, timeout_seconds=timeout_seconds),
+        is_error=True,
+        metadata={"returncode": None, "timed_out": True},
     )
 
 

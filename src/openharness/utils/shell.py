@@ -23,9 +23,9 @@ def resolve_shell_command(
     """Return argv for the best available shell on the current platform."""
     resolved_platform = platform_name or get_platform()
     if resolved_platform == "windows":
-        bash = shutil.which("bash")
-        if bash and _bash_is_usable(bash):
-            return [bash, "-lc", command]
+        for bash in _windows_bash_candidates():
+            if _bash_is_usable(bash):
+                return [bash, "-lc", command]
         powershell = shutil.which("pwsh") or shutil.which("powershell")
         if powershell:
             return [powershell, "-NoLogo", "-NoProfile", "-Command", command]
@@ -121,6 +121,25 @@ def _wrap_command_with_script(
     return None
 
 
+def _windows_bash_candidates() -> list[str]:
+    candidates = [
+        shutil.which("bash"),
+        os.environ.get("GIT_BASH"),
+        r"C:\Program Files\Git\bin\bash.exe",
+        r"C:\Program Files\Git\usr\bin\bash.exe",
+        r"C:\Program Files (x86)\Git\bin\bash.exe",
+        r"C:\Program Files (x86)\Git\usr\bin\bash.exe",
+    ]
+    seen: set[str] = set()
+    result: list[str] = []
+    for candidate in candidates:
+        if not candidate or candidate in seen:
+            continue
+        seen.add(candidate)
+        result.append(candidate)
+    return result
+
+
 def _bash_is_usable(bash_path: str) -> bool:
     """Return True when a discovered bash executable can run commands.
 
@@ -128,15 +147,24 @@ def _bash_is_usable(bash_path: str) -> bool:
     WSL distribution is installed. In that case the executable exists but every
     command fails, so fall back to PowerShell/cmd instead of selecting it.
     """
+    if os.name == "nt" and bash_path.startswith("/"):
+        return True
+    marker = "__openharness_bash_ok__"
     try:
         result = subprocess.run(
-            [bash_path, "-lc", "exit 0"],
+            [bash_path, "-lc", f"printf {marker}"],
             capture_output=True,
             timeout=5,
             check=False,
         )
     except (FileNotFoundError, OSError, subprocess.TimeoutExpired):
         return False
+    stdout = getattr(result, "stdout", b"")
+    stderr = getattr(result, "stderr", b"")
+    if stdout or stderr:
+        out = stdout.decode("utf-8", errors="replace").strip()
+        err = stderr.decode("utf-8", errors="replace").strip()
+        return result.returncode == 0 and out == marker and not err
     return result.returncode == 0
 
 

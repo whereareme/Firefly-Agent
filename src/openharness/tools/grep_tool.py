@@ -121,7 +121,11 @@ def _python_grep_files(
     for path in paths:
         if len(collected) >= limit:
             break
-        if not path.is_file():
+        try:
+            is_file = path.is_file()
+        except OSError:
+            continue
+        if not is_file:
             continue
         try:
             raw = path.read_bytes()

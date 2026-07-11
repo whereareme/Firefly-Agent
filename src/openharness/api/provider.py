@@ -142,6 +142,9 @@ _MULTIMODAL_MODEL_PATTERNS: list[re.Pattern[str]] = [
     # Google Gemini
     re.compile(r"^gemini-(?:pro-)?vision"),
     re.compile(r"^gemini-2\.\d+"),
+    re.compile(
+        r"^gemini[-_\s]?3(?:\.\d+)?(?:[-_\s]?(?:pro|flash(?:[-_\s]?lite)?|image|preview|customtools))*"
+    ),
     # Qwen / DashScope VL series
     re.compile(r"^qwen-vl"),
     re.compile(r"^qwen2\.5?-vl"),

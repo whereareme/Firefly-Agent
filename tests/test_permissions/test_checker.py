@@ -116,6 +116,20 @@ def test_valid_allow_rule_is_added():
     assert checker._path_rules[0].allow is True
 
 
+def test_first_matching_path_rule_wins():
+    settings = _settings_with_rules(
+        PathRuleConfig(pattern="/data/public/*", allow=True),
+        PathRuleConfig(pattern="/data/*", allow=False),
+    )
+    checker = PermissionChecker(settings)
+
+    allowed = checker.evaluate("read_file", is_read_only=True, file_path="/data/public/note.txt")
+    denied = checker.evaluate("read_file", is_read_only=True, file_path="/data/private/note.txt")
+
+    assert allowed.allowed is True
+    assert denied.allowed is False
+
+
 def test_pattern_with_surrounding_whitespace_is_stripped():
     """A pattern with leading/trailing whitespace is accepted with whitespace stripped."""
     rule = PathRuleConfig.model_construct(pattern="  /etc/*  ", allow=False)
@@ -161,9 +175,26 @@ class TestSensitivePathProtection:
             "/home/user/.kube/config",
             "/home/user/.openharness/credentials.json",
             "/home/user/.openharness/copilot_auth.json",
+            "/home/user/.codex/auth.json",
+            "/home/user/.claude/.credentials.json",
+            "/home/user/.git-credentials",
+            "/home/user/.netrc",
+            "/home/user/.npmrc",
+            "/home/user/.pypirc",
+            "/home/user/project/.env",
+            "/home/user/project/.env.local",
         ):
             decision = checker.evaluate("read_file", is_read_only=True, file_path=path)
             assert decision.allowed is False, f"Expected {path} to be denied"
+
+    def test_sensitive_path_blocks_windows_paths(self):
+        checker = PermissionChecker(PermissionSettings(mode=PermissionMode.FULL_AUTO))
+        decision = checker.evaluate(
+            "read_file",
+            is_read_only=True,
+            file_path=r"C:\Users\Admin\.codex\auth.json",
+        )
+        assert decision.allowed is False
 
     def test_sensitive_path_blocks_write_tools(self):
         """Sensitive path protection applies to write operations too."""
@@ -199,10 +230,23 @@ class TestSensitivePathProtection:
             assert decision.allowed is True, f"Expected {path} to be allowed"
 
     def test_no_file_path_skips_sensitive_check(self):
-        """Tools without a file path (e.g. bash) are not affected."""
         checker = PermissionChecker(PermissionSettings(mode=PermissionMode.FULL_AUTO))
         decision = checker.evaluate("bash", is_read_only=False, command="echo hello")
         assert decision.allowed is True
+
+    @pytest.mark.parametrize(
+        "command",
+        [
+            "cat ~/.codex/auth.json",
+            r"Get-Content C:\Users\Admin\.claude\.credentials.json",
+            "type .env",
+        ],
+    )
+    def test_sensitive_bash_command_blocked_without_file_path(self, command):
+        checker = PermissionChecker(PermissionSettings(mode=PermissionMode.FULL_AUTO))
+        decision = checker.evaluate("bash", is_read_only=False, command=command)
+        assert decision.allowed is False
+        assert "sensitive credential" in decision.reason
 
     @pytest.mark.parametrize(
         "pattern",
@@ -223,6 +267,14 @@ class TestSensitivePathProtection:
             "*/.kube/config": "/home/u/.kube/config",
             "*/.openharness/credentials.json": "/home/u/.openharness/credentials.json",
             "*/.openharness/copilot_auth.json": "/home/u/.openharness/copilot_auth.json",
+            "*/.codex/auth.json": "/home/u/.codex/auth.json",
+            "*/.claude/.credentials.json": "/home/u/.claude/.credentials.json",
+            "*/.git-credentials": "/home/u/.git-credentials",
+            "*/.netrc": "/home/u/.netrc",
+            "*/.npmrc": "/home/u/.npmrc",
+            "*/.pypirc": "/home/u/.pypirc",
+            "*/.env": "/home/u/project/.env",
+            "*/.env.*": "/home/u/project/.env.local",
         }
         test_path = example_paths[pattern]
         checker = PermissionChecker(PermissionSettings(mode=PermissionMode.FULL_AUTO))

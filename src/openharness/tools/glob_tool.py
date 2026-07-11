@@ -5,8 +5,9 @@ from __future__ import annotations
 import asyncio
 import shutil
 from pathlib import Path
+from typing import Any
 
-from pydantic import AliasChoices, BaseModel, Field
+from pydantic import AliasChoices, BaseModel, Field, model_validator
 
 from openharness.tools.base import BaseTool, ToolExecutionContext, ToolResult
 
@@ -20,6 +21,19 @@ class GlobToolInput(BaseModel):
     )
     root: str | None = Field(default=None, description="Optional search root")
     limit: int = Field(default=200, ge=1, le=5000)
+
+    @model_validator(mode="before")
+    @classmethod
+    def accept_description_pattern(cls, value: Any) -> Any:
+        if not isinstance(value, dict) or value.get("pattern") or value.get("path"):
+            return value
+        description = str(value.get("description") or "").strip()
+        label, separator, pattern = description.partition(":")
+        if separator and label.strip().lower() == "pattern" and pattern.strip():
+            return {**value, "pattern": pattern.strip()}
+        if description and _has_glob_magic(description):
+            return {**value, "pattern": description}
+        return value
 
 
 class GlobTool(BaseTool):

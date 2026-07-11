@@ -34,6 +34,36 @@ SENSITIVE_PATH_PATTERNS: tuple[str, ...] = (
     # OpenHarness own credential stores
     "*/.openharness/credentials.json",
     "*/.openharness/copilot_auth.json",
+    # Common local agent, VCS, package, and env credential stores
+    "*/.codex/auth.json",
+    "*/.claude/.credentials.json",
+    "*/.git-credentials",
+    "*/.netrc",
+    "*/.npmrc",
+    "*/.pypirc",
+    "*/.env",
+    "*/.env.*",
+)
+
+SENSITIVE_COMMAND_MARKERS: tuple[str, ...] = (
+    "/.ssh/",
+    "/.aws/credentials",
+    "/.aws/config",
+    "/.config/gcloud/",
+    "/.azure/",
+    "/.gnupg/",
+    "/.docker/config.json",
+    "/.kube/config",
+    "/.openharness/credentials.json",
+    "/.openharness/copilot_auth.json",
+    "/.codex/auth.json",
+    "/.claude/.credentials.json",
+    "/.git-credentials",
+    "/.netrc",
+    "/.npmrc",
+    "/.pypirc",
+    "/.env",
+    " .env",
 )
 
 
@@ -86,16 +116,23 @@ class PermissionChecker:
         # defence-in-depth measure against LLM-directed or prompt-injection
         # driven access to credential files.
         if file_path:
-            for candidate_path in _policy_match_paths(file_path):
-                for pattern in SENSITIVE_PATH_PATTERNS:
-                    if fnmatch.fnmatch(candidate_path, pattern):
-                        return PermissionDecision(
-                            allowed=False,
-                            reason=(
-                                f"Access denied: {file_path} is a sensitive credential path "
-                                f"(matched built-in pattern '{pattern}')"
-                            ),
-                        )
+            pattern = _sensitive_path_match(file_path)
+            if pattern:
+                return PermissionDecision(
+                    allowed=False,
+                    reason=(
+                        f"Access denied: {file_path} is a sensitive credential path "
+                        f"(matched built-in pattern '{pattern}')"
+                    ),
+                )
+
+        if command:
+            marker = _sensitive_command_match(command)
+            if marker:
+                return PermissionDecision(
+                    allowed=False,
+                    reason=f"Access denied: command references sensitive credential path '{marker}'",
+                )
 
         # Explicit tool deny list
         if tool_name in self._settings.denied_tools:
@@ -105,16 +142,23 @@ class PermissionChecker:
         if tool_name in self._settings.allowed_tools:
             return PermissionDecision(allowed=True, reason=f"{tool_name} is explicitly allowed")
 
-        # Check path-level rules
+        # Check path-level rules. The first matching rule decides the path
+        # decision; allow rules only pass the path check and do not bypass the
+        # selected permission mode.
         if file_path and self._path_rules:
-            for candidate_path in _policy_match_paths(file_path):
-                for rule in self._path_rules:
+            candidate_paths = _policy_match_paths(file_path)
+            for rule in self._path_rules:
+                for candidate_path in candidate_paths:
                     if fnmatch.fnmatch(candidate_path, rule.pattern):
                         if not rule.allow:
                             return PermissionDecision(
                                 allowed=False,
                                 reason=f"Path {file_path} matches deny rule: {rule.pattern}",
                             )
+                        break
+                else:
+                    continue
+                break
 
         # Check command deny patterns (e.g. deny "rm -rf /")
         if command:
@@ -163,10 +207,29 @@ def _policy_match_paths(file_path: str) -> tuple[str, ...]:
     as ``/home/user/.ssh``. Appending a trailing slash lets glob-style deny
     patterns like ``*/.ssh/*`` and ``/etc/*`` match the directory root itself.
     """
-    normalized = file_path.rstrip("/")
+    normalized = file_path.rstrip("/\\")
     if not normalized:
         return (file_path,)
-    return (normalized, normalized + "/")
+    variants: list[str] = []
+    for candidate in (normalized, normalized.replace("\\", "/")):
+        variants.extend((candidate, candidate + "/", candidate + "\\"))
+    return tuple(dict.fromkeys(variants))
+
+
+def _sensitive_path_match(file_path: str) -> str | None:
+    for candidate_path in _policy_match_paths(file_path):
+        for pattern in SENSITIVE_PATH_PATTERNS:
+            if fnmatch.fnmatch(candidate_path, pattern):
+                return pattern
+    return None
+
+
+def _sensitive_command_match(command: str) -> str | None:
+    normalized = f" {command}".replace("\\", "/").lower()
+    for marker in SENSITIVE_COMMAND_MARKERS:
+        if marker in normalized:
+            return marker.strip()
+    return None
 
 
 def _bash_permission_hint(command: str | None) -> str:

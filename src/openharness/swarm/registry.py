@@ -7,7 +7,7 @@ import os
 import shutil
 from typing import TYPE_CHECKING, Any
 
-from openharness.platforms import get_platform, get_platform_capabilities
+from openharness.platforms import get_platform
 from openharness.swarm.spawn_utils import is_tmux_available
 from openharness.swarm.types import BackendDetectionResult, BackendType, TeammateExecutor
 
@@ -378,13 +378,11 @@ class BackendRegistry:
 
     def _register_defaults(self) -> None:
         """Register built-in backends that are unconditionally available."""
+        from openharness.swarm.in_process import InProcessBackend
         from openharness.swarm.subprocess_backend import SubprocessBackend
 
         self._backends["subprocess"] = SubprocessBackend()
-        if get_platform_capabilities().supports_swarm_mailbox:
-            from openharness.swarm.in_process import InProcessBackend
-
-            self._backends["in_process"] = InProcessBackend()
+        self._backends["in_process"] = InProcessBackend()
 
         # Tmux backend registration is deferred until implementation exists.
         # If a TmuxBackend is available it can be registered via register_backend().

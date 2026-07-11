@@ -337,6 +337,8 @@ def _iter_workspace_gateway_pids(workspace: str | Path | None = None) -> list[in
             line = line.strip()
             if not line or line.lower() == "processid":
                 continue
+            if " " in line:
+                line = line.split(None, 1)[0]
             try:
                 pid = int(line)
             except ValueError:
@@ -398,6 +400,8 @@ def stop_gateway_process(cwd: str | Path | None = None, workspace: str | Path | 
         return False
     if sys.platform == "win32":
         for pid in unique_pids:
+            with contextlib.suppress(ProcessLookupError, OSError):
+                os.kill(pid, signal.SIGTERM)
             with contextlib.suppress(Exception):
                 subprocess.run(
                     ["taskkill", "/F", "/T", "/PID", str(pid)],

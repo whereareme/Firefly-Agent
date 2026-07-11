@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from openharness.tools.grep_tool import GrepTool, GrepToolInput
+from openharness.tools.grep_tool import GrepTool, GrepToolInput, _python_grep_files
 
 
 class _FakeStdout:
@@ -41,6 +41,21 @@ class _FakeProcess:
 
     async def wait(self):
         return self.returncode
+
+
+class _InaccessiblePath:
+    def is_file(self):
+        raise OSError("denied")
+
+
+def test_python_grep_skips_inaccessible_paths(tmp_path: Path):
+    assert _python_grep_files(
+        paths=[_InaccessiblePath()],
+        pattern="anything",
+        case_sensitive=True,
+        limit=10,
+        display_base=tmp_path,
+    ) == "(no matches)"
 
 
 @pytest.mark.asyncio

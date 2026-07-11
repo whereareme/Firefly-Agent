@@ -1,5 +1,5 @@
 """ohmo personal agent app built on top of OpenHarness."""
 
-__all__ = ["__version__"]
+from openharness.version import __version__
 
-__version__ = "0.1.9"
+__all__ = ["__version__"]

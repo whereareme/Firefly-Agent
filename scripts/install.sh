@@ -229,10 +229,10 @@ if [ "$FROM_SOURCE" = true ]; then
     fi
 
     info "Installing in editable mode (pip install -e .)..."
-    $PIP_CMD install -e "$INSTALL_DIR" --quiet
+    $PIP_CMD install -e "$INSTALL_DIR[channels,firefly]" --quiet
 else
-    info "Mode: pip install openharness-ai"
-    $PIP_CMD install openharness-ai --quiet --upgrade
+    info "Mode: pip install openharness-ai[channels,firefly]"
+    $PIP_CMD install "openharness-ai[channels,firefly]" --quiet --upgrade
 fi
 
 success "OpenHarness package installed"
@@ -286,7 +286,8 @@ mkdir -p "$BIN_DIR"
 ln -snf "$VENV_DIR/bin/oh" "$BIN_DIR/oh"
 ln -snf "$VENV_DIR/bin/ohmo" "$BIN_DIR/ohmo"
 ln -snf "$VENV_DIR/bin/openharness" "$BIN_DIR/openharness"
-success "Linked oh/ohmo into ${BIN_DIR}"
+ln -snf "$VENV_DIR/bin/firefly" "$BIN_DIR/firefly"
+success "Linked oh/ohmo/firefly into ${BIN_DIR}"
 
 # ---------------------------------------------------------------------------
 # Step 9: Verify installation
@@ -300,6 +301,17 @@ if [ -x "$BIN_DIR/oh" ] && [ -x "$BIN_DIR/ohmo" ]; then
     echo ""
     echo -e "  ${BOLD}oh${RESET} is ready: ${GREEN}${OH_VERSION}${RESET}"
     echo -e "  ${BOLD}ohmo${RESET} is ready: ${GREEN}${OHMO_VERSION}${RESET}"
+    if [ -x "$BIN_DIR/firefly" ]; then
+        if FIREFLY_CHECK=$("$BIN_DIR/firefly" check 2>&1); then
+            echo -e "  ${BOLD}firefly${RESET} is ready"
+        else
+            warn "Firefly is installed but its readiness check failed."
+        fi
+        echo "  firefly check:"
+        echo "$FIREFLY_CHECK" | sed 's/^/    /'
+    else
+        warn "This published package does not include Firefly yet. Re-run with --from-source."
+    fi
 elif "$PYTHON_CMD" -m openharness --version &>/dev/null 2>&1; then
     OH_VERSION=$("$PYTHON_CMD" -m openharness --version 2>&1)
     warn "'oh'/'ohmo' command links are not executable yet. Run via: python -m openharness or python -m ohmo"
@@ -379,7 +391,10 @@ echo "         fish:     source ~/.config/fish/config.fish"
 echo "    2. Set your API key:        export ANTHROPIC_API_KEY=your_key"
 echo "    3. Launch:                  oh"
 echo "    4. Launch ohmo:             ohmo"
-echo "    5. Docs:                    https://github.com/HKUDS/OpenHarness"
+echo "    5. Check Firefly:           firefly check"
+echo "    6. Launch Firefly desktop:  firefly desktop"
+echo "    7. Source checkout tests:   uv sync --extra dev --extra channels --extra firefly && uv run pytest -q"
+echo "    8. Docs:                    https://github.com/HKUDS/OpenHarness"
 echo ""
 echo "  Notes:"
 echo "    - Commands are linked into: ${BIN_DIR}"

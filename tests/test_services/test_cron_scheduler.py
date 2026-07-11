@@ -11,6 +11,7 @@ from unittest.mock import AsyncMock, Mock, patch
 import pytest
 
 from openharness.services.cron_scheduler import (
+    _command_for_job,
     _jobs_due,
     append_history,
     execute_job,
@@ -18,6 +19,30 @@ from openharness.services.cron_scheduler import (
     start_daemon,
     run_scheduler_loop,
 )
+
+
+def test_agent_turn_command_uses_configured_runner_and_profile() -> None:
+    command = _command_for_job(
+        {
+            "cwd": "/tmp/project",
+            "payload": {
+                "kind": "agent_turn",
+                "message": "check status",
+                "runner": "firefly",
+                "profile": "codex",
+            },
+        }
+    )
+
+    assert command == "firefly --profile codex --cwd /tmp/project --print 'check status'"
+
+
+def test_agent_turn_command_keeps_ohmo_as_backward_compatible_default() -> None:
+    command = _command_for_job(
+        {"cwd": "/tmp/project", "payload": {"kind": "agent_turn", "message": "check status"}}
+    )
+
+    assert command.startswith("ohmo --cwd /tmp/project --print")
 
 
 @pytest.fixture(autouse=True)

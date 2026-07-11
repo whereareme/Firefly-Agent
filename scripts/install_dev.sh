@@ -93,7 +93,7 @@ python -m pip install --upgrade pip setuptools wheel --quiet
 success "Virtual environment ready: ${VENV_DIR}"
 
 step "Installing current checkout in editable mode"
-python -m pip install -e "$REPO_ROOT" --quiet
+python -m pip install -e "$REPO_ROOT[channels,firefly]" --quiet
 success "Installed OpenHarness from ${REPO_ROOT}"
 
 if [ "$WITH_CHANNELS" = true ]; then

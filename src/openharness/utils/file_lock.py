@@ -8,6 +8,7 @@ both race-free and crash-safe.
 
 from __future__ import annotations
 
+import os
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Iterator
@@ -36,8 +37,14 @@ def exclusive_file_lock(
             yield
         return
     if resolved_platform in {"macos", "linux", "wsl"}:
-        with _exclusive_posix_lock(lock_path):
-            yield
+        try:
+            with _exclusive_posix_lock(lock_path):
+                yield
+        except SwarmLockUnavailableError:
+            if os.name != "nt":
+                raise
+            with _exclusive_windows_lock(lock_path):
+                yield
         return
     raise SwarmLockUnavailableError(
         f"file locking is not supported on platform {resolved_platform!r}"

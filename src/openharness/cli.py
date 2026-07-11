@@ -15,7 +15,7 @@ from urllib.parse import urlparse
 
 import typer
 
-__version__ = "0.1.9"
+from openharness.version import __version__
 
 _PREVIEW_STOPWORDS = {
     "a",

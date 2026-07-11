@@ -3,7 +3,9 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "start": "tsx src/index.tsx"
+    "start": "tsx src/index.tsx",
+    "typecheck": "tsc --noEmit",
+    "test": "tsx --test \"src/**/*.test.ts\" \"src/**/*.test.tsx\""
   },
   "dependencies": {
     "ink": "^5.1.0",
@@ -15,7 +17,7 @@
   "devDependencies": {
     "@types/node": "^22.13.10",
     "@types/react": "^18.3.12",
-    "tsx": "^4.19.2",
+    "tsx": "^4.23.0",
     "typescript": "^5.7.3"
   }
 }

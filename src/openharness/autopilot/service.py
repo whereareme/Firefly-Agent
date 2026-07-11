@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 import shlex
 import subprocess
 import tempfile
@@ -134,6 +135,7 @@ def _json_default(value: object) -> object:
 
 
 _SHELL_METACHARS = frozenset(";&|`$<>\n\r")
+_WINDOWS_UNQUOTED_EXE_RE = re.compile(r"^([A-Za-z]:\\[^\s]+)(?:\s+(.*))?$")
 
 
 @dataclass(frozen=True)
@@ -183,7 +185,7 @@ def _parse_verification_entry(entry: object) -> _VerificationCommand:
             ),
         )
     try:
-        argv = shlex.split(raw)
+        argv = _split_verification_argv(raw)
     except ValueError as exc:
         return _VerificationCommand(
             raw=raw,
@@ -194,6 +196,15 @@ def _parse_verification_entry(entry: object) -> _VerificationCommand:
     if not argv:
         return _VerificationCommand(raw=raw, argv=(), shell=False, error="empty command")
     return _VerificationCommand(raw=raw, argv=tuple(argv), shell=False)
+
+
+def _split_verification_argv(raw: str) -> list[str]:
+    if os.name == "nt":
+        match = _WINDOWS_UNQUOTED_EXE_RE.match(raw)
+        if match:
+            rest = match.group(2)
+            return [match.group(1), *([] if not rest else shlex.split(rest))]
+    return shlex.split(raw)
 
 
 def _looks_available(command: str, cwd: Path) -> bool:

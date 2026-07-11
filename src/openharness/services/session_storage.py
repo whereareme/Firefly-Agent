@@ -51,6 +51,116 @@ def _persistable_tool_metadata(tool_metadata: dict[str, object] | None) -> dict[
     return payload
 
 
+def _session_key_latest_path(session_dir: Path, session_key: str) -> Path:
+    token = sha1(session_key.encode("utf-8")).hexdigest()[:12]
+    return session_dir / f"latest-{token}.json"
+
+
+def _save_app_session_snapshot(
+    *,
+    app: str,
+    session_dir: Path,
+    cwd: str | Path,
+    model: str,
+    system_prompt: str,
+    messages: list[ConversationMessage],
+    usage: UsageSnapshot,
+    session_id: str | None = None,
+    session_key: str | None = None,
+    tool_metadata: dict[str, object] | None = None,
+) -> Path:
+    """Persist a snapshot for an app-owned session directory."""
+    sid = session_id or uuid4().hex[:12]
+    messages = sanitize_conversation_messages(messages)
+    summary = next(
+        (message.text.strip()[:80] for message in messages if message.role == "user" and message.text.strip()),
+        "",
+    )
+    payload = {
+        "app": app,
+        "session_id": sid,
+        "session_key": session_key,
+        "cwd": str(Path(cwd).resolve()),
+        "model": model,
+        "system_prompt": system_prompt,
+        "messages": [message.model_dump(mode="json") for message in messages],
+        "usage": usage.model_dump(),
+        "tool_metadata": _persistable_tool_metadata(tool_metadata),
+        "created_at": time.time(),
+        "summary": summary,
+        "message_count": len(messages),
+    }
+    data = json.dumps(payload, indent=2) + "\n"
+    latest_path = session_dir / "latest.json"
+    atomic_write_text(latest_path, data)
+    if session_key:
+        atomic_write_text(_session_key_latest_path(session_dir, session_key), data)
+    atomic_write_text(session_dir / f"session-{sid}.json", data)
+    return latest_path
+
+
+def _load_latest_from_dir(session_dir: Path) -> dict[str, Any] | None:
+    path = session_dir / "latest.json"
+    if not path.exists():
+        return None
+    return _sanitize_snapshot_payload(json.loads(path.read_text(encoding="utf-8")))
+
+
+def _load_latest_for_session_key_from_dir(session_dir: Path, session_key: str) -> dict[str, Any] | None:
+    path = _session_key_latest_path(session_dir, session_key)
+    if not path.exists():
+        return None
+    return _sanitize_snapshot_payload(json.loads(path.read_text(encoding="utf-8")))
+
+
+def _list_app_session_snapshots(session_dir: Path, limit: int = 20) -> list[dict[str, Any]]:
+    sessions: list[dict[str, Any]] = []
+    for path in sorted(session_dir.glob("session-*.json"), key=lambda item: item.stat().st_mtime, reverse=True):
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            continue
+        sessions.append(
+            {
+                "session_id": data.get("session_id", path.stem.replace("session-", "")),
+                "summary": data.get("summary", ""),
+                "message_count": data.get("message_count", len(data.get("messages", []))),
+                "model": data.get("model", ""),
+                "created_at": data.get("created_at", path.stat().st_mtime),
+            }
+        )
+        if len(sessions) >= limit:
+            break
+    return sessions
+
+
+def _load_app_session_by_id(session_dir: Path, session_id: str) -> dict[str, Any] | None:
+    path = session_dir / f"session-{session_id}.json"
+    if path.exists():
+        return _sanitize_snapshot_payload(json.loads(path.read_text(encoding="utf-8")))
+    latest = _load_latest_from_dir(session_dir)
+    if latest and (latest.get("session_id") == session_id or session_id == "latest"):
+        return latest
+    return None
+
+
+def _export_app_session_markdown(
+    *,
+    app: str,
+    session_dir: Path,
+    messages: list[ConversationMessage],
+) -> Path:
+    path = session_dir / "transcript.md"
+    parts = [f"# {app} Session Transcript"]
+    for message in messages:
+        parts.append(f"\n## {message.role.capitalize()}\n")
+        text = message.text.strip()
+        if text:
+            parts.append(text)
+    atomic_write_text(path, "\n".join(parts).strip() + "\n")
+    return path
+
+
 def get_project_session_dir(cwd: str | Path) -> Path:
     """Return the session directory for a project."""
     path = Path(cwd).resolve()

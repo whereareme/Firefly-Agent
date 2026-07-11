@@ -134,6 +134,8 @@ class ImageGenerationTool(BaseTool):
                 "OpenAI image generation API key is not configured. Set image_generation.api_key "
                 "or OPENHARNESS_IMAGE_GENERATION_API_KEY, or choose provider='codex'."
             )
+        if _uses_chat_image_endpoint(model):
+            return await self._generate_chat_images(arguments, model, api_key, base_url)
         if arguments.image_paths:
             return await self._edit_images(arguments, model, api_key, base_url)
         return await self._generate_images(arguments, model, api_key, base_url)
@@ -204,6 +206,20 @@ class ImageGenerationTool(BaseTool):
         return _extract_b64_images(result)
 
     @staticmethod
+    async def _generate_chat_images(arguments: ImageGenerationToolInput, model: str, api_key: str, base_url: str) -> list[str]:
+        url = f"{(_normalize_openai_base_url(base_url) or 'https://api.openai.com/v1').rstrip('/')}/chat/completions"
+        body: dict[str, Any] = {
+            "model": model,
+            "messages": [{"role": "user", "content": _chat_user_content(arguments)}],
+            "modalities": ["image", "text"],
+        }
+        async with httpx.AsyncClient(timeout=180.0, follow_redirects=True) as client:
+            response = await client.post(url, headers={"Authorization": f"Bearer {api_key}"}, json=body)
+            if response.status_code >= 400:
+                raise RuntimeError(response.text or f"chat image request failed: {response.status_code}")
+            return _extract_b64_images_from_chat(response.json())
+
+    @staticmethod
     async def _edit_images(arguments: ImageGenerationToolInput, model: str, api_key: str, base_url: str) -> list[str]:
         client = AsyncOpenAI(
             api_key=api_key,
@@ -270,6 +286,11 @@ def _resolve_provider(requested: str, config: dict[str, object]) -> Literal["ope
     return "openai"
 
 
+def _uses_chat_image_endpoint(model: str) -> bool:
+    lowered = model.strip().lower()
+    return "image" in lowered and not lowered.startswith(("gpt-image", "grok-imagine"))
+
+
 def _image_payload(arguments: ImageGenerationToolInput, model: str) -> dict[str, Any]:
     payload: dict[str, Any] = {
         "model": model,
@@ -284,6 +305,18 @@ def _image_payload(arguments: ImageGenerationToolInput, model: str) -> dict[str,
         "moderation": arguments.moderation,
     }
     return {key: value for key, value in payload.items() if value is not None}
+
+
+def _chat_user_content(arguments: ImageGenerationToolInput) -> str | list[dict[str, Any]]:
+    if not arguments.image_paths:
+        return arguments.prompt
+    content: list[dict[str, Any]] = [{"type": "text", "text": arguments.prompt}]
+    for path_str in arguments.image_paths:
+        path = Path(path_str).expanduser().resolve()
+        media_type = _media_type_for_path(path)
+        data = base64.b64encode(path.read_bytes()).decode("ascii")
+        content.append({"type": "image_url", "image_url": {"url": f"data:{media_type};base64,{data}"}})
+    return content
 
 
 def _codex_prompt(arguments: ImageGenerationToolInput) -> str:
@@ -353,4 +386,27 @@ def _extract_b64_images(result: Any) -> list[str]:
         url = getattr(item, "url", None)
         if isinstance(url, str) and url.startswith("data:image/") and ";base64," in url:
             images.append(url.split(";base64,", 1)[1])
+    return images
+
+
+def _extract_b64_images_from_chat(payload: Any) -> list[str]:
+    images: list[str] = []
+
+    def walk(value: Any, key: str = "") -> None:
+        if isinstance(value, dict):
+            for child_key, child in value.items():
+                walk(child, str(child_key))
+            return
+        if isinstance(value, list):
+            for child in value:
+                walk(child, key)
+            return
+        if not isinstance(value, str) or not value:
+            return
+        if value.startswith("data:image/") and ";base64," in value:
+            images.append(value.split(";base64,", 1)[1])
+        elif key in {"b64_json", "base64", "image_base64"}:
+            images.append(value)
+
+    walk(payload)
     return images

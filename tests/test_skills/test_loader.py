@@ -7,7 +7,7 @@ from pathlib import Path
 
 from openharness.config.settings import Settings
 from openharness.skills import get_user_skills_dir, load_skill_registry
-from openharness.skills.loader import discover_project_skill_dirs, get_user_skill_dirs
+from openharness.skills.loader import discover_project_skill_dirs, get_user_skill_dirs, load_skills_from_dirs
 from openharness.skills.bundled import _parse_frontmatter as parse_bundled_frontmatter
 from openharness.skills.loader import _parse_skill_markdown as parse_skill_markdown
 
@@ -159,6 +159,49 @@ def test_project_skill_discovery_walks_up_to_git_root(tmp_path: Path, monkeypatc
     assert package_skill_dir.resolve() in dirs
     assert outside_skill_dir.resolve() not in dirs
     assert dirs.index(root_skill_dir.resolve()) < dirs.index(package_skill_dir.resolve())
+
+
+def test_project_skill_discovery_skips_inaccessible_dirs(tmp_path: Path, monkeypatch, caplog):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    good_dir = repo / ".claude" / "skills"
+    bad_dir = repo / ".agents" / "skills"
+    good_dir.mkdir(parents=True)
+    bad_dir.mkdir(parents=True)
+    original_is_dir = Path.is_dir
+
+    def fake_is_dir(path: Path) -> bool:
+        if path == bad_dir:
+            raise OSError("blocked")
+        return original_is_dir(path)
+
+    monkeypatch.setattr(Path, "is_dir", fake_is_dir)
+
+    dirs = discover_project_skill_dirs(repo)
+
+    assert good_dir.resolve() in dirs
+    assert bad_dir.resolve() not in dirs
+    assert "Ignoring inaccessible skill path" not in caplog.text
+
+
+def test_load_skills_from_dirs_skips_inaccessible_dirs(tmp_path: Path, monkeypatch):
+    good_root = tmp_path / "good"
+    bad_root = tmp_path / "bad"
+    good_root.mkdir()
+    bad_root.mkdir()
+    _write_skill(good_root, "usable")
+    original_iterdir = Path.iterdir
+
+    def fake_iterdir(path: Path):
+        if path == bad_root:
+            raise OSError("blocked")
+        return original_iterdir(path)
+
+    monkeypatch.setattr(Path, "iterdir", fake_iterdir)
+
+    skills = load_skills_from_dirs([bad_root, good_root])
+
+    assert [skill.command_name for skill in skills] == ["usable"]
 
 
 def test_project_skill_nearer_cwd_overrides_parent_and_user(tmp_path: Path, monkeypatch):

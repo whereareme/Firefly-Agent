@@ -13,6 +13,12 @@ from pydantic import BaseModel, Field
 from openharness.tools.base import BaseTool, ToolExecutionContext, ToolResult
 from openharness.utils.network_guard import NetworkGuardError, fetch_public_http_response
 
+DEFAULT_SEARCH_ENDPOINTS = (
+    "https://html.duckduckgo.com/html/",
+    "https://lite.duckduckgo.com/lite/",
+    "https://www.bing.com/search",
+)
+
 
 class WebSearchToolInput(BaseModel):
     """Arguments for a web search."""
@@ -42,21 +48,29 @@ class WebSearchTool(BaseTool):
         context: ToolExecutionContext,
     ) -> ToolResult:
         del context
-        endpoint = arguments.search_url or os.environ.get("OPENHARNESS_WEB_SEARCH_URL") or "https://html.duckduckgo.com/html/"
-        try:
-            response = await fetch_public_http_response(
-                endpoint,
-                params={"q": arguments.query},
-                headers={"User-Agent": "OpenHarness/0.1"},
-                timeout=20.0,
-            )
-            response.raise_for_status()
-        except (httpx.HTTPError, NetworkGuardError) as exc:
-            return ToolResult(output=f"web_search failed: {exc}", is_error=True)
+        configured = arguments.search_url or os.environ.get("OPENHARNESS_WEB_SEARCH_URL")
+        endpoints = (configured,) if configured else DEFAULT_SEARCH_ENDPOINTS
+        errors: list[str] = []
+        results: list[dict[str, str]] = []
+        for endpoint in endpoints:
+            try:
+                response = await fetch_public_http_response(
+                    endpoint,
+                    params={"q": arguments.query},
+                    headers={"User-Agent": "Mozilla/5.0 OpenHarness/0.1"},
+                    timeout=6.0,
+                )
+                response.raise_for_status()
+            except (httpx.HTTPError, NetworkGuardError) as exc:
+                errors.append(str(exc) or type(exc).__name__)
+                continue
 
-        results = _parse_search_results(response.text, limit=arguments.max_results)
+            results = _parse_search_results(response.text, limit=arguments.max_results)
+            if results:
+                break
+            errors.append(f"{endpoint}: no results")
         if not results:
-            return ToolResult(output="No search results found.", is_error=True)
+            return ToolResult(output=f"web_search failed: {'; '.join(errors) or 'No search results found.'}", is_error=True)
 
         lines = [f"Search results for: {arguments.query}"]
         for index, result in enumerate(results, start=1):
@@ -68,6 +82,10 @@ class WebSearchTool(BaseTool):
 
 
 def _parse_search_results(body: str, *, limit: int) -> list[dict[str, str]]:
+    return _parse_duckduckgo_results(body, limit=limit) or _parse_bing_results(body, limit=limit)
+
+
+def _parse_duckduckgo_results(body: str, *, limit: int) -> list[dict[str, str]]:
     snippets = [
         _clean_html(match.group("snippet"))
         for match in re.finditer(
@@ -99,6 +117,26 @@ def _parse_search_results(body: str, *, limit: int) -> list[dict[str, str]]:
         snippet = snippets[index] if index < len(snippets) else ""
         if title and url:
             results.append({"title": title, "url": url, "snippet": snippet})
+        if len(results) >= limit:
+            break
+    return results
+
+
+def _parse_bing_results(body: str, *, limit: int) -> list[dict[str, str]]:
+    results: list[dict[str, str]] = []
+    for match in re.finditer(r'<li[^>]+class="[^"]*\bb_algo\b[^"]*"[^>]*>(?P<body>.*?)</li>', body, flags=re.IGNORECASE | re.DOTALL):
+        block = match.group("body")
+        anchor = re.search(r"<h2[^>]*>\s*<a(?P<attrs>[^>]*)>(?P<title>.*?)</a>\s*</h2>", block, flags=re.IGNORECASE | re.DOTALL)
+        if anchor is None:
+            continue
+        href = re.search(r'href="(?P<href>[^"]+)"', anchor.group("attrs"), flags=re.IGNORECASE)
+        if href is None:
+            continue
+        snippet = re.search(r'<p[^>]*>(?P<snippet>.*?)</p>', block, flags=re.IGNORECASE | re.DOTALL)
+        title = _clean_html(anchor.group("title"))
+        url = html.unescape(href.group("href"))
+        if title and url:
+            results.append({"title": title, "url": url, "snippet": _clean_html(snippet.group("snippet")) if snippet else ""})
         if len(results) >= limit:
             break
     return results

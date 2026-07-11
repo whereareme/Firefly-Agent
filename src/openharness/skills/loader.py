@@ -115,8 +115,12 @@ def discover_project_skill_dirs(
     seen: set[Path] = set()
     for base in reversed(levels):
         for rel in relative_dirs:
-            candidate = (base / rel).resolve()
-            if candidate in seen or not candidate.is_dir():
+            try:
+                candidate = (base / rel).resolve()
+            except OSError as error:
+                logger.warning("Ignoring inaccessible project skill dir: %s (%s)", base / rel, error)
+                continue
+            if candidate in seen or not _safe_is_dir(candidate):
                 continue
             seen.add(candidate)
             roots.append(candidate)
@@ -166,22 +170,35 @@ def load_skills_from_dirs(
         return skills
     seen: set[Path] = set()
     for directory in directories:
-        root = Path(directory).expanduser().resolve()
-        if create_missing:
-            root.mkdir(parents=True, exist_ok=True)
-        elif not root.is_dir():
+        try:
+            root = Path(directory).expanduser().resolve()
+            if create_missing:
+                root.mkdir(parents=True, exist_ok=True)
+            elif not _safe_is_dir(root):
+                continue
+            children = sorted(root.iterdir())
+        except OSError as error:
+            logger.warning("Ignoring inaccessible skill dir: %s (%s)", directory, error)
             continue
         candidates: list[Path] = []
-        for child in sorted(root.iterdir()):
-            if child.is_dir():
-                skill_path = child / "SKILL.md"
+        for child in children:
+            if not _safe_is_dir(child):
+                continue
+            skill_path = child / "SKILL.md"
+            try:
                 if skill_path.exists():
                     candidates.append(skill_path)
+            except OSError as error:
+                logger.warning("Ignoring inaccessible skill file: %s (%s)", skill_path, error)
         for path in candidates:
             if path in seen:
                 continue
             seen.add(path)
-            content = path.read_text(encoding="utf-8")
+            try:
+                content = path.read_text(encoding="utf-8")
+            except OSError as error:
+                logger.warning("Ignoring unreadable skill file: %s (%s)", path, error)
+                continue
             default_name = path.parent.name
             metadata = _parse_skill_metadata(default_name, content)
             name = metadata["name"]
@@ -204,6 +221,13 @@ def load_skills_from_dirs(
                 )
             )
     return skills
+
+
+def _safe_is_dir(path: Path) -> bool:
+    try:
+        return path.is_dir()
+    except OSError:
+        return False
 
 
 def _parse_skill_markdown(default_name: str, content: str) -> tuple[str, str]:

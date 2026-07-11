@@ -53,6 +53,34 @@ class _FakeAsyncClient:
         return self._response
 
 
+class _FakePostResponse:
+    def __init__(self, payload: dict[str, Any], status_code: int = 200) -> None:
+        self._payload = payload
+        self.status_code = status_code
+        self.text = json.dumps(payload)
+
+    def json(self) -> dict[str, Any]:
+        return self._payload
+
+
+class _FakePostClient:
+    def __init__(self, response: _FakePostResponse, sink: dict[str, Any]) -> None:
+        self._response = response
+        self._sink = sink
+
+    async def __aenter__(self) -> "_FakePostClient":
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb) -> None:
+        return None
+
+    async def post(self, url: str, *, headers: dict[str, str], json: dict[str, Any]):
+        self._sink["url"] = url
+        self._sink["headers"] = headers
+        self._sink["json"] = json
+        return self._response
+
+
 def _b64url(data: dict[str, object]) -> str:
     raw = json.dumps(data, separators=(",", ":")).encode("utf-8")
     return base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
@@ -102,6 +130,52 @@ async def test_execute_generate_writes_file(monkeypatch: pytest.MonkeyPatch, tmp
     assert out.read_bytes() == image_bytes
     assert result.metadata["paths"] == [str(out)]
     assert result.metadata["provider"] == "openai"
+
+
+@pytest.mark.asyncio
+async def test_execute_gemini_image_model_uses_chat_completions(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    image_b64 = base64.b64encode(b"gemini-png").decode("ascii")
+    sink: dict[str, Any] = {}
+    response = _FakePostResponse(
+        {
+            "choices": [
+                {
+                    "message": {
+                        "content": [
+                            {"type": "text", "text": "done"},
+                            {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{image_b64}"}},
+                        ]
+                    }
+                }
+            ]
+        }
+    )
+    monkeypatch.setattr(
+        "openharness.tools.image_generation_tool.httpx.AsyncClient",
+        lambda *args, **kwargs: _FakePostClient(response, sink),
+    )
+
+    tool = ImageGenerationTool()
+    result = await tool.execute(
+        ImageGenerationToolInput(prompt="a cat", output_path="cat.png", provider="openai"),
+        ToolExecutionContext(
+            cwd=tmp_path,
+            metadata={
+                "image_generation_config": {
+                    "api_key": "test-key",
+                    "base_url": "http://127.0.0.1:8317/v1",
+                    "model": "gemini-3.1-flash-image",
+                }
+            },
+        ),
+    )
+
+    out = tmp_path / "cat.png"
+    assert not result.is_error
+    assert out.read_bytes() == b"gemini-png"
+    assert sink["url"] == "http://127.0.0.1:8317/v1/chat/completions"
+    assert sink["json"]["model"] == "gemini-3.1-flash-image"
+    assert sink["json"]["modalities"] == ["image", "text"]
 
 
 @pytest.mark.asyncio

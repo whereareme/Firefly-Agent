@@ -2,14 +2,24 @@
 
 from __future__ import annotations
 
+import sys
+
 from prompt_toolkit import PromptSession
+from prompt_toolkit.output import DummyOutput
 
 
 class InputSession:
     """Async prompt wrapper."""
 
     def __init__(self) -> None:
-        self._session = PromptSession()
+        if sys.platform == "win32" and not sys.stdout.isatty():
+            self._session = PromptSession(output=DummyOutput())
+            self._prompt = "> "
+            return
+        try:
+            self._session = PromptSession()
+        except Exception:
+            self._session = PromptSession(output=DummyOutput())
         self._prompt = "> "
 
     def set_modes(self, *, vim_enabled: bool, voice_enabled: bool) -> None:

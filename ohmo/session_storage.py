@@ -2,21 +2,20 @@
 
 from __future__ import annotations
 
-import json
-import hashlib
-import time
 from pathlib import Path
 from typing import Any
-from uuid import uuid4
 
 from openharness.api.usage import UsageSnapshot
-from openharness.engine.messages import ConversationMessage, sanitize_conversation_messages
+from openharness.engine.messages import ConversationMessage
 from openharness.services.session_backend import SessionBackend
 from openharness.services.session_storage import (
-    _persistable_tool_metadata,
-    _sanitize_snapshot_payload,
+    _export_app_session_markdown,
+    _list_app_session_snapshots,
+    _load_app_session_by_id,
+    _load_latest_for_session_key_from_dir,
+    _load_latest_from_dir,
+    _save_app_session_snapshot,
 )
-from openharness.utils.fs import atomic_write_text
 
 from ohmo.workspace import get_sessions_dir
 
@@ -26,16 +25,6 @@ def get_session_dir(workspace: str | Path | None = None) -> Path:
     session_dir = get_sessions_dir(workspace)
     session_dir.mkdir(parents=True, exist_ok=True)
     return session_dir
-
-
-def _session_key_token(session_key: str) -> str:
-    return hashlib.sha1(session_key.encode("utf-8")).hexdigest()[:12]
-
-
-def _session_key_latest_path(workspace: str | Path | None, session_key: str) -> Path:
-    session_dir = get_session_dir(workspace)
-    token = _session_key_token(session_key)
-    return session_dir / f"latest-{token}.json"
 
 
 def save_session_snapshot(
@@ -51,84 +40,34 @@ def save_session_snapshot(
     tool_metadata: dict[str, object] | None = None,
 ) -> Path:
     """Persist the latest ohmo session snapshot."""
-    session_dir = get_session_dir(workspace)
-    sid = session_id or uuid4().hex[:12]
-    now = time.time()
-    messages = sanitize_conversation_messages(messages)
-    summary = ""
-    for msg in messages:
-        if msg.role == "user" and msg.text.strip():
-            summary = msg.text.strip()[:80]
-            break
-
-    payload = {
-        "app": "ohmo",
-        "session_id": sid,
-        "session_key": session_key,
-        "cwd": str(Path(cwd).resolve()),
-        "model": model,
-        "system_prompt": system_prompt,
-        "messages": [message.model_dump(mode="json") for message in messages],
-        "usage": usage.model_dump(),
-        "tool_metadata": _persistable_tool_metadata(tool_metadata),
-        "created_at": now,
-        "summary": summary,
-        "message_count": len(messages),
-    }
-    data = json.dumps(payload, indent=2) + "\n"
-    latest_path = session_dir / "latest.json"
-    atomic_write_text(latest_path, data)
-    if session_key:
-        atomic_write_text(_session_key_latest_path(workspace, session_key), data)
-    session_path = session_dir / f"session-{sid}.json"
-    atomic_write_text(session_path, data)
-    return latest_path
+    return _save_app_session_snapshot(
+        app="ohmo",
+        session_dir=get_session_dir(workspace),
+        cwd=cwd,
+        model=model,
+        system_prompt=system_prompt,
+        messages=messages,
+        usage=usage,
+        session_id=session_id,
+        session_key=session_key,
+        tool_metadata=tool_metadata,
+    )
 
 
 def load_latest(workspace: str | Path | None = None) -> dict[str, Any] | None:
-    path = get_session_dir(workspace) / "latest.json"
-    if not path.exists():
-        return None
-    return _sanitize_snapshot_payload(json.loads(path.read_text(encoding="utf-8")))
+    return _load_latest_from_dir(get_session_dir(workspace))
 
 
 def load_latest_for_session_key(workspace: str | Path | None, session_key: str) -> dict[str, Any] | None:
-    path = _session_key_latest_path(workspace, session_key)
-    if path.exists():
-        return _sanitize_snapshot_payload(json.loads(path.read_text(encoding="utf-8")))
-    return None
+    return _load_latest_for_session_key_from_dir(get_session_dir(workspace), session_key)
 
 
 def list_snapshots(workspace: str | Path | None = None, limit: int = 20) -> list[dict[str, Any]]:
-    session_dir = get_session_dir(workspace)
-    sessions: list[dict[str, Any]] = []
-    for path in sorted(session_dir.glob("session-*.json"), key=lambda p: p.stat().st_mtime, reverse=True):
-        try:
-            data = json.loads(path.read_text(encoding="utf-8"))
-        except (json.JSONDecodeError, OSError):
-            continue
-        sessions.append(
-            {
-                "session_id": data.get("session_id", path.stem.replace("session-", "")),
-                "summary": data.get("summary", ""),
-                "message_count": data.get("message_count", len(data.get("messages", []))),
-                "model": data.get("model", ""),
-                "created_at": data.get("created_at", path.stat().st_mtime),
-            }
-        )
-        if len(sessions) >= limit:
-            break
-    return sessions
+    return _list_app_session_snapshots(get_session_dir(workspace), limit)
 
 
 def load_by_id(workspace: str | Path | None, session_id: str) -> dict[str, Any] | None:
-    path = get_session_dir(workspace) / f"session-{session_id}.json"
-    if path.exists():
-        return _sanitize_snapshot_payload(json.loads(path.read_text(encoding="utf-8")))
-    latest = load_latest(workspace)
-    if latest and (latest.get("session_id") == session_id or session_id == "latest"):
-        return latest
-    return None
+    return _load_app_session_by_id(get_session_dir(workspace), session_id)
 
 
 def export_session_markdown(
@@ -137,15 +76,12 @@ def export_session_markdown(
     workspace: str | Path | None = None,
     messages: list[ConversationMessage],
 ) -> Path:
-    path = get_session_dir(workspace) / "transcript.md"
-    parts = ["# ohmo Session Transcript"]
-    for message in messages:
-        parts.append(f"\n## {message.role.capitalize()}\n")
-        text = message.text.strip()
-        if text:
-            parts.append(text)
-    atomic_write_text(path, "\n".join(parts).strip() + "\n")
-    return path
+    del cwd
+    return _export_app_session_markdown(
+        app="ohmo",
+        session_dir=get_session_dir(workspace),
+        messages=messages,
+    )
 
 
 class OhmoSessionBackend(SessionBackend):

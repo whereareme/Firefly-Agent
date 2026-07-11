@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Firefly Agent</title>
+    <link rel="stylesheet" href="/styles.css" />
+    <script defer src="/vendor/pixi.min.js"></script>
+    <script defer src="/assets/live2d/Core/live2dcubismcore.min.js"></script>
+    <script defer src="/vendor/pixi-live2d-display.min.js"></script>
+    <script defer src="/app.js"></script>
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside class="side-panel">
+        <header class="brand-block">
+          <div>
+            <p class="eyebrow">local companion</p>
+            <h1>Firefly Agent</h1>
+          </div>
+          <span id="health-pill" class="status-pill">启动中</span>
+        </header>
+
+        <section class="panel-section">
+          <h2>人物设定</h2>
+          <div id="persona-card" class="persona-card">读取中...</div>
+        </section>
+
+        <section class="panel-section grow-section">
+          <div class="section-row">
+            <h2>本地读取</h2>
+            <span id="file-count" class="muted">0</span>
+          </div>
+          <input id="file-search" class="search-input" type="search" placeholder="搜索本地资料" />
+          <div id="file-list" class="file-list"></div>
+        </section>
+      </aside>
+
+      <main class="chat-panel">
+        <header class="chat-header">
+          <div>
+            <p class="eyebrow">dialogue</p>
+            <h2>和流萤对话</h2>
+          </div>
+          <span id="model-pill" class="status-pill">LLM</span>
+        </header>
+
+        <div id="chat-log" class="chat-log" aria-live="polite"></div>
+
+        <form id="chat-form" class="composer">
+          <textarea id="message-input" rows="2" placeholder="输入你想问的内容"></textarea>
+          <button id="send-button" type="submit">发送</button>
+        </form>
+      </main>
+
+      <section class="live-panel">
+        <header class="live-header">
+          <div>
+            <p class="eyebrow">live2d</p>
+            <h2>流萤</h2>
+          </div>
+          <span id="live2d-pill" class="status-pill">检测中</span>
+        </header>
+        <div id="live-stage" class="live-stage">
+          <canvas id="firefly-live2d"></canvas>
+          <div id="live-fallback" class="live-fallback">
+            <div class="fallback-portrait">
+              <span>Firefly</span>
+            </div>
+          </div>
+        </div>
+        <div id="source-box" class="source-box"></div>
+      </section>
+    </div>
+  </body>
+</html>

@@ -15,7 +15,7 @@ OpenHarness is an open-source agent harness focused on clarity, hackability, and
 ```bash
 git clone https://github.com/HKUDS/OpenHarness.git
 cd OpenHarness
-uv sync --extra dev
+uv sync --extra dev --extra channels --extra firefly
 ```
 
 If you want to work on the React terminal UI as well:
@@ -31,7 +31,7 @@ cd ../..
 Run the same core checks that CI runs before opening a PR:
 
 ```bash
-uv run ruff check src tests scripts
+uv run ruff check src tests scripts ohmo firefly
 uv run pytest -q
 ```
 

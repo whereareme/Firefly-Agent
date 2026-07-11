@@ -12,7 +12,7 @@ from openharness.channels.bus.events import OutboundMessage
 from openharness.channels.bus.queue import MessageBus
 from openharness.channels.impl.base import BaseChannel, resolve_channel_media_dir
 from openharness.config.schema import DiscordConfig
-from openharness.utils.helpers import split_message
+from openharness.utils.helpers import safe_filename, split_message
 
 logger = logging.getLogger(__name__)
 
@@ -227,18 +227,23 @@ class DiscordChannel(BaseChannel):
         content_parts = [content] if content else []
         media_paths: list[str] = []
         media_dir = resolve_channel_media_dir(self.name)
+        media_root = media_dir.resolve()
 
         for attachment in payload.get("attachments") or []:
             url = attachment.get("url")
             filename = attachment.get("filename") or "attachment"
+            display_filename = safe_filename(filename) or "attachment"
             size = attachment.get("size") or 0
             if not url or not self._http:
                 continue
             if size and size > MAX_ATTACHMENT_BYTES:
-                content_parts.append(f"[attachment: {filename} - too large]")
+                content_parts.append(f"[attachment: {display_filename} - too large]")
                 continue
             try:
-                file_path = media_dir / f"{attachment.get('id', 'file')}_{filename.replace('/', '_')}"
+                attachment_id = safe_filename(attachment.get("id") or "file", max_length=64) or "file"
+                file_path = (media_root / f"{attachment_id}_{display_filename}").resolve()
+                if not file_path.is_relative_to(media_root):
+                    raise ValueError("attachment path escaped media directory")
                 resp = await self._http.get(url)
                 resp.raise_for_status()
                 file_path.write_bytes(resp.content)
@@ -246,7 +251,7 @@ class DiscordChannel(BaseChannel):
                 content_parts.append(f"[attachment: {file_path}]")
             except Exception as e:
                 logger.warning("Failed to download Discord attachment: %s", e)
-                content_parts.append(f"[attachment: {filename} - download failed]")
+                content_parts.append(f"[attachment: {display_filename} - download failed]")
 
         reply_to = (payload.get("referenced_message") or {}).get("id")
 

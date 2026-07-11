@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import importlib.metadata
 import json
 import os
 import re
@@ -92,6 +91,7 @@ from openharness.skills import load_skill_registry
 from openharness.skills.types import SkillDefinition
 from openharness.tasks import get_task_manager
 from openharness.plugins.types import PluginCommandDefinition
+from openharness.version import __version__
 
 if TYPE_CHECKING:
     from openharness.config.settings import ProviderProfile
@@ -442,6 +442,174 @@ def _register_user_invocable_skill_commands(registry: CommandRegistry) -> None:
         )
 
 
+async def _exit_handler(_: str, context: CommandContext) -> CommandResult:
+    del context
+    return CommandResult(should_exit=True)
+
+
+async def _clear_handler(_: str, context: CommandContext) -> CommandResult:
+    context.engine.clear()
+    return CommandResult(message="Conversation cleared.", clear_screen=True)
+
+
+async def _status_handler(_: str, context: CommandContext) -> CommandResult:
+    usage = context.engine.total_usage
+    state = context.app_state.get() if context.app_state is not None else None
+    manager = AuthManager()
+    return CommandResult(
+        message=(
+            f"Messages: {len(context.engine.messages)}\n"
+            f"Usage: input={usage.input_tokens} output={usage.output_tokens}\n"
+            f"Profile: {manager.get_active_profile()}\n"
+            f"Effort: {state.effort if state is not None else load_settings().effort}\n"
+            f"Passes: {state.passes if state is not None else load_settings().passes}"
+        )
+    )
+
+
+async def _version_handler(_: str, context: CommandContext) -> CommandResult:
+    del context
+    return CommandResult(message=f"OpenHarness {__version__}")
+
+
+async def _context_handler(_: str, context: CommandContext) -> CommandResult:
+    settings = load_settings()
+    prompt = build_runtime_system_prompt(
+        settings,
+        cwd=context.cwd,
+        include_project_memory=context.include_project_memory,
+    )
+    return CommandResult(message=prompt)
+
+
+async def _summary_handler(args: str, context: CommandContext) -> CommandResult:
+    max_messages = 8
+    if args:
+        try:
+            max_messages = max(1, int(args))
+        except ValueError:
+            return CommandResult(message="Usage: /summary [MAX_MESSAGES]")
+    summary = summarize_messages(context.engine.messages, max_messages=max_messages)
+    return CommandResult(message=summary or "No conversation content to summarize.")
+
+
+async def _compact_handler(args: str, context: CommandContext) -> CommandResult:
+    preserve_recent = 6
+    if args:
+        try:
+            preserve_recent = max(1, int(args))
+        except ValueError:
+            return CommandResult(message="Usage: /compact [PRESERVE_RECENT]")
+    before = len(context.engine.messages)
+    try:
+        compacted_result = await compact_conversation(
+            context.engine.messages,
+            api_client=context.engine.api_client,
+            model=context.engine.model,
+            system_prompt=context.engine.system_prompt,
+            preserve_recent=preserve_recent,
+            trigger="manual",
+        )
+        compacted = build_post_compact_messages(compacted_result)
+    except Exception:
+        compacted = compact_messages(context.engine.messages, preserve_recent=preserve_recent)
+    context.engine.load_messages(compacted)
+    return CommandResult(
+        message=f"Compacted conversation from {before} messages to {len(compacted)}."
+    )
+
+
+async def _usage_handler(_: str, context: CommandContext) -> CommandResult:
+    usage = context.engine.total_usage
+    estimated = estimate_conversation_tokens(context.engine.messages)
+    return CommandResult(
+        message=(
+            f"Actual usage: input={usage.input_tokens} output={usage.output_tokens}\n"
+            f"Estimated conversation tokens: {estimated}\n"
+            f"Messages: {len(context.engine.messages)}"
+        )
+    )
+
+
+async def _cost_handler(_: str, context: CommandContext) -> CommandResult:
+    usage = context.engine.total_usage
+    model = context.app_state.get().model if context.app_state is not None else load_settings().model
+    estimated_cost = "unavailable"
+    if model.startswith("claude-3-5-sonnet"):
+        estimated = (usage.input_tokens * 3.0 + usage.output_tokens * 15.0) / 1_000_000
+        estimated_cost = f"${estimated:.4f} (estimated)"
+    elif model.startswith("claude-3-7-sonnet"):
+        estimated = (usage.input_tokens * 3.0 + usage.output_tokens * 15.0) / 1_000_000
+        estimated_cost = f"${estimated:.4f} (estimated)"
+    elif model.startswith("claude-3-opus"):
+        estimated = (usage.input_tokens * 15.0 + usage.output_tokens * 75.0) / 1_000_000
+        estimated_cost = f"${estimated:.4f} (estimated)"
+    return CommandResult(
+        message=(
+            f"Model: {model}\n"
+            f"Input tokens: {usage.input_tokens}\n"
+            f"Output tokens: {usage.output_tokens}\n"
+            f"Total tokens: {usage.total_tokens}\n"
+            f"Estimated cost: {estimated_cost}"
+        )
+    )
+
+
+async def _stats_handler(_: str, context: CommandContext) -> CommandResult:
+    settings = load_settings()
+    memory_backend = _memory_backend_for_context(context)
+    memory_count = len(memory_backend.list_files())
+    task_count = len(get_task_manager().list_tasks())
+    tool_count = len(context.tool_registry.list_tools()) if context.tool_registry is not None else 0
+    style = settings.output_style
+    if context.app_state is not None:
+        style = context.app_state.get().output_style
+    return CommandResult(
+        message=(
+            "Session stats:\n"
+            f"- messages: {len(context.engine.messages)}\n"
+            f"- estimated_tokens: {estimate_conversation_tokens(context.engine.messages)}\n"
+            f"- tools: {tool_count}\n"
+            f"- memory_files: {memory_count}\n"
+            f"- background_tasks: {task_count}\n"
+            f"- output_style: {style}"
+        )
+    )
+
+
+def _dedupe_model_values(values: Iterable[str]) -> list[str]:
+    models: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        model = value.strip()
+        if not model or model in seen:
+            continue
+        models.append(model)
+        seen.add(model)
+    return models
+
+
+def _seed_model_values(profile: "ProviderProfile") -> list[str]:
+    existing = _dedupe_model_values(profile.allowed_models)
+    if existing:
+        return existing
+    return _dedupe_model_values([display_model_setting(profile)])
+
+
+def _format_model_status(active_profile: str, profile: "ProviderProfile") -> str:
+    lines = [
+        f"Model: {display_model_setting(profile)}",
+        f"Profile: {active_profile}",
+    ]
+    if profile.allowed_models:
+        lines.append("Available models:")
+        lines.extend(f"- {model}" for model in profile.allowed_models)
+    else:
+        lines.append("Available models: unrestricted for this profile")
+        lines.append("Use /model add MODEL to pin switchable models for the TUI selector.")
+    return "\n".join(lines)
+
+
 def create_default_command_registry(
     plugin_commands: Iterable[PluginCommandDefinition] | None = None,
 ) -> CommandRegistry:
@@ -451,136 +619,6 @@ def create_default_command_registry(
     async def _help_handler(_: str, context: CommandContext) -> CommandResult:
         del context
         return CommandResult(message=registry.help_text())
-
-    async def _exit_handler(_: str, context: CommandContext) -> CommandResult:
-        del context
-        return CommandResult(should_exit=True)
-
-    async def _clear_handler(_: str, context: CommandContext) -> CommandResult:
-        context.engine.clear()
-        return CommandResult(message="Conversation cleared.", clear_screen=True)
-
-    async def _status_handler(_: str, context: CommandContext) -> CommandResult:
-        usage = context.engine.total_usage
-        state = context.app_state.get() if context.app_state is not None else None
-        manager = AuthManager()
-        return CommandResult(
-            message=(
-                f"Messages: {len(context.engine.messages)}\n"
-                f"Usage: input={usage.input_tokens} output={usage.output_tokens}\n"
-                f"Profile: {manager.get_active_profile()}\n"
-                f"Effort: {state.effort if state is not None else load_settings().effort}\n"
-                f"Passes: {state.passes if state is not None else load_settings().passes}"
-            )
-        )
-
-    async def _version_handler(_: str, context: CommandContext) -> CommandResult:
-        del context
-        try:
-            version = importlib.metadata.version("openharness")
-        except importlib.metadata.PackageNotFoundError:
-            version = "0.1.7"
-        return CommandResult(message=f"OpenHarness {version}")
-
-    async def _context_handler(_: str, context: CommandContext) -> CommandResult:
-        settings = load_settings()
-        prompt = build_runtime_system_prompt(
-            settings,
-            cwd=context.cwd,
-            include_project_memory=context.include_project_memory,
-        )
-        return CommandResult(message=prompt)
-
-    async def _summary_handler(args: str, context: CommandContext) -> CommandResult:
-        max_messages = 8
-        if args:
-            try:
-                max_messages = max(1, int(args))
-            except ValueError:
-                return CommandResult(message="Usage: /summary [MAX_MESSAGES]")
-        summary = summarize_messages(context.engine.messages, max_messages=max_messages)
-        return CommandResult(message=summary or "No conversation content to summarize.")
-
-    async def _compact_handler(args: str, context: CommandContext) -> CommandResult:
-        preserve_recent = 6
-        if args:
-            try:
-                preserve_recent = max(1, int(args))
-            except ValueError:
-                return CommandResult(message="Usage: /compact [PRESERVE_RECENT]")
-        before = len(context.engine.messages)
-        try:
-            compacted_result = await compact_conversation(
-                context.engine.messages,
-                api_client=context.engine.api_client,
-                model=context.engine.model,
-                system_prompt=context.engine.system_prompt,
-                preserve_recent=preserve_recent,
-                trigger="manual",
-            )
-            compacted = build_post_compact_messages(compacted_result)
-        except Exception:
-            compacted = compact_messages(context.engine.messages, preserve_recent=preserve_recent)
-        context.engine.load_messages(compacted)
-        return CommandResult(
-            message=f"Compacted conversation from {before} messages to {len(compacted)}."
-        )
-
-    async def _usage_handler(_: str, context: CommandContext) -> CommandResult:
-        usage = context.engine.total_usage
-        estimated = estimate_conversation_tokens(context.engine.messages)
-        return CommandResult(
-            message=(
-                f"Actual usage: input={usage.input_tokens} output={usage.output_tokens}\n"
-                f"Estimated conversation tokens: {estimated}\n"
-                f"Messages: {len(context.engine.messages)}"
-            )
-        )
-
-    async def _cost_handler(_: str, context: CommandContext) -> CommandResult:
-        usage = context.engine.total_usage
-        model = context.app_state.get().model if context.app_state is not None else load_settings().model
-        estimated_cost = "unavailable"
-        if model.startswith("claude-3-5-sonnet"):
-            estimated = (usage.input_tokens * 3.0 + usage.output_tokens * 15.0) / 1_000_000
-            estimated_cost = f"${estimated:.4f} (estimated)"
-        elif model.startswith("claude-3-7-sonnet"):
-            estimated = (usage.input_tokens * 3.0 + usage.output_tokens * 15.0) / 1_000_000
-            estimated_cost = f"${estimated:.4f} (estimated)"
-        elif model.startswith("claude-3-opus"):
-            estimated = (usage.input_tokens * 15.0 + usage.output_tokens * 75.0) / 1_000_000
-            estimated_cost = f"${estimated:.4f} (estimated)"
-        return CommandResult(
-            message=(
-                f"Model: {model}\n"
-                f"Input tokens: {usage.input_tokens}\n"
-                f"Output tokens: {usage.output_tokens}\n"
-                f"Total tokens: {usage.total_tokens}\n"
-                f"Estimated cost: {estimated_cost}"
-            )
-        )
-
-    async def _stats_handler(_: str, context: CommandContext) -> CommandResult:
-        settings = load_settings()
-        memory_backend = _memory_backend_for_context(context)
-        memory_count = len(memory_backend.list_files())
-        task_count = len(get_task_manager().list_tasks())
-        tool_count = len(context.tool_registry.list_tools()) if context.tool_registry is not None else 0
-        style = settings.output_style
-        if context.app_state is not None:
-            state = context.app_state.get()
-            style = state.output_style
-        return CommandResult(
-            message=(
-                "Session stats:\n"
-                f"- messages: {len(context.engine.messages)}\n"
-                f"- estimated_tokens: {estimate_conversation_tokens(context.engine.messages)}\n"
-                f"- tools: {tool_count}\n"
-                f"- memory_files: {memory_count}\n"
-                f"- background_tasks: {task_count}\n"
-                f"- output_style: {style}"
-            )
-        )
 
     async def _dream_handler(args: str, context: CommandContext) -> CommandResult:
         settings = getattr(context.engine, "_settings", None) or load_settings().materialize_active_profile()
@@ -1522,36 +1560,6 @@ def create_default_command_registry(
             return CommandResult(message="Plan mode disabled.", refresh_runtime=True)
         return CommandResult(message="Usage: /plan [on|off]")
 
-    def _dedupe_model_values(values: Iterable[str]) -> list[str]:
-        models: list[str] = []
-        seen: set[str] = set()
-        for value in values:
-            model = value.strip()
-            if not model or model in seen:
-                continue
-            models.append(model)
-            seen.add(model)
-        return models
-
-    def _seed_model_values(profile: "ProviderProfile") -> list[str]:
-        existing = _dedupe_model_values(profile.allowed_models)
-        if existing:
-            return existing
-        return _dedupe_model_values([display_model_setting(profile)])
-
-    def _format_model_status(active_profile: str, profile: "ProviderProfile") -> str:
-        lines = [
-            f"Model: {display_model_setting(profile)}",
-            f"Profile: {active_profile}",
-        ]
-        if profile.allowed_models:
-            lines.append("Available models:")
-            lines.extend(f"- {model}" for model in profile.allowed_models)
-        else:
-            lines.append("Available models: unrestricted for this profile")
-            lines.append("Use /model add MODEL to pin switchable models for the TUI selector.")
-        return "\n".join(lines)
-
     async def _model_handler(args: str, context: CommandContext) -> CommandResult:
         settings = load_settings()
         manager = AuthManager(settings)
@@ -1935,16 +1943,12 @@ def create_default_command_registry(
 
     async def _upgrade_handler(_: str, context: CommandContext) -> CommandResult:
         del context
-        try:
-            version = importlib.metadata.version("openharness")
-        except importlib.metadata.PackageNotFoundError:
-            version = "0.1.7"
         return CommandResult(
             message=(
-                f"Current version: {version}\n"
+                f"Current version: {__version__}\n"
                 "Upgrade instructions:\n"
-                "- uv sync --extra dev\n"
-                "- uv pip install -e .\n"
+                "- uv sync --extra dev --extra channels --extra firefly\n"
+                "- uv pip install -e '.[channels,firefly]'\n"
                 "- npm --prefix frontend/terminal install"
             )
         )

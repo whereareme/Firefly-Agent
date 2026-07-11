@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "openharness-ai"
-version = "0.1.9"
+dynamic = ["version"]
 description = "Open-source Python port of Claude Code - an AI-powered CLI coding assistant"
 readme = "README.md"
 license = "MIT"
@@ -29,13 +29,20 @@ dependencies = [
     "questionary>=2.0.1",
     "watchfiles>=0.20.0",
     "croniter>=2.0.0",
+    "tzdata>=2024.1",
+]
+
+[project.optional-dependencies]
+channels = [
     "slack-sdk>=3.0.0",
     "python-telegram-bot>=21.0.0",
     "discord.py>=2.0.0",
     "lark-oapi>=1.5.0",
 ]
-
-[project.optional-dependencies]
+firefly = [
+    "PySide6>=6.7.0",
+    "pypdf>=4.0.0",
+]
 dev = [
     "pexpect>=4.9.0",
     "pytest>=8.0.0",
@@ -50,13 +57,17 @@ openharness = "openharness.cli:app"
 oh = "openharness.cli:app"
 openh = "openharness.cli:app"
 ohmo = "ohmo.cli:app"
+firefly = "firefly.cli:app"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/openharness", "ohmo"]
+packages = ["src/openharness", "ohmo", "firefly"]
 
 [tool.hatch.build]
 exclude = [
     "/.git",
+    "/.agents",
+    "/.claude",
+    "/.codex",
     "/.venv",
     "/.openharness-venv",
     "/.openharness",
@@ -72,14 +83,29 @@ exclude = [
 "frontend/terminal/tsconfig.json" = "openharness/_frontend/tsconfig.json"
 "frontend/terminal/src" = "openharness/_frontend/src"
 
+[tool.hatch.version]
+path = "src/openharness/version.py"
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
 
 [tool.ruff]
 line-length = 100
-target-version = "py311"
+target-version = "py310"
 
 [tool.mypy]
-python_version = "3.11"
+python_version = "3.10"
 strict = true
+mypy_path = "src"
+explicit_package_bases = true
+follow_imports = "skip"
+ignore_missing_imports = true
+files = [
+    "src/openharness/version.py",
+    "src/openharness/permissions/checker.py",
+    "src/openharness/utils/fs.py",
+    "src/openharness/utils/network_guard.py",
+    "firefly/library_index.py",
+    "firefly/workspace.py",
+]

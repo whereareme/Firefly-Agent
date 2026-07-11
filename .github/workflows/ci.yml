@@ -8,14 +8,22 @@ on:
 
 jobs:
   python-tests:
-    name: Python tests (${{ matrix.python-version }})
-    runs-on: ubuntu-latest
+    name: Python tests (${{ matrix.os }}, ${{ matrix.python-version }})
+    runs-on: ${{ matrix.os }}
+    env:
+      QT_QPA_PLATFORM: offscreen
     strategy:
       fail-fast: false
       matrix:
-        python-version:
-          - "3.10"
-          - "3.11"
+        include:
+          - os: ubuntu-latest
+            python-version: "3.10"
+          - os: ubuntu-latest
+            python-version: "3.11"
+          - os: ubuntu-latest
+            python-version: "3.12"
+          - os: windows-latest
+            python-version: "3.12"
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -31,10 +39,10 @@ jobs:
           enable-cache: true
 
       - name: Install dependencies
-        run: uv sync --extra dev
+        run: uv sync --extra dev --extra channels --extra firefly
 
       - name: Run test suite
-        run: uv run pytest -q
+        run: uv run pytest -q --cov=src/openharness --cov=ohmo --cov=firefly --cov-report=term --cov-fail-under=60
 
   python-quality:
     name: Python quality
@@ -54,10 +62,13 @@ jobs:
           enable-cache: true
 
       - name: Install dependencies
-        run: uv sync --extra dev
+        run: uv sync --extra dev --extra channels --extra firefly
 
       - name: Ruff
-        run: uv run ruff check src tests scripts
+        run: uv run ruff check src tests scripts ohmo firefly
+
+      - name: Mypy baseline
+        run: uv run mypy
 
   frontend-typecheck:
     name: Frontend typecheck
@@ -80,4 +91,30 @@ jobs:
         run: npm ci
 
       - name: TypeScript check
-        run: npx tsc --noEmit
+        run: npm run typecheck
+
+      - name: Frontend tests
+        run: npm test
+
+  autopilot-dashboard-build:
+    name: Autopilot dashboard build
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: autopilot-dashboard
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: autopilot-dashboard/package-lock.json
+
+      - name: Install dashboard dependencies
+        run: npm ci
+
+      - name: Build dashboard
+        run: npm run build

@@ -182,10 +182,10 @@ if ($FromSource) {
     }
     
     Write-Info "Installing in editable mode (pip install -e .)..."
-    pip install -e $InstallDir --quiet
+    pip install -e "${InstallDir}[channels,firefly]" --quiet
 } else {
-    Write-Info "Mode: pip install openharness-ai"
-    pip install openharness-ai --quiet --upgrade
+    Write-Info "Mode: pip install openharness-ai[channels,firefly]"
+    pip install "openharness-ai[channels,firefly]" --quiet --upgrade
 }
 
 Write-Success "OpenHarness package installed"
@@ -262,6 +262,7 @@ $OhPath = "$VenvBinDir\oh.exe"
 $OpenhPath = "$VenvBinDir\openh.exe"
 $OpenharnessPath = "$VenvBinDir\openharness.exe"
 $OhmoPath = "$VenvBinDir\ohmo.exe"
+$FireflyPath = "$VenvBinDir\firefly.exe"
 
 # Pick the best available launcher. The 'openh' alias was added after v0.1.6,
 # so PyPI installs of older releases won't have openh.exe. Prefer it when
@@ -292,6 +293,19 @@ if ($LauncherExe -and (Test-Path $OhmoPath)) {
         Write-Host "  'oh' is also installed, but PowerShell may resolve it to Out-Host first." -ForegroundColor Yellow
     }
     Write-Host "  ohmo is ready" -ForegroundColor Green
+    if (Test-Path $FireflyPath) {
+        $FireflyCheck = & $FireflyPath check 2>&1
+        $FireflyExitCode = $LASTEXITCODE
+        if ($FireflyExitCode -eq 0) {
+            Write-Host "  firefly is ready" -ForegroundColor Green
+        } else {
+            Write-Warn "Firefly is installed but its readiness check failed."
+        }
+        Write-Host "  firefly check:" -ForegroundColor Green
+        Write-Host "    $FireflyCheck"
+    } else {
+        Write-Warn "This published package does not include Firefly yet. Re-run with -FromSource."
+    }
 } else {
     # Try module execution
     $ModuleVersion = python -m openharness --version 2>&1
@@ -325,5 +339,8 @@ if ($Launcher -eq "openharness") {
     Write-Host "       Note: 'oh' may collide with the built-in Out-Host alias in PowerShell."
 }
 Write-Host "    4. Launch ohmo:             ohmo"
-Write-Host "    5. Docs:                    https://github.com/HKUDS/OpenHarness"
+Write-Host "    5. Check Firefly:           firefly check"
+Write-Host "    6. Launch Firefly desktop:  firefly desktop"
+Write-Host "    7. Source checkout tests:   uv sync --extra dev --extra channels --extra firefly; uv run pytest -q"
+Write-Host "    8. Docs:                    https://github.com/HKUDS/OpenHarness"
 Write-Host ""
