@@ -96,8 +96,19 @@ EXPLICIT_NON_FIREFLY_IMAGE_SUBJECT_MARKERS = (
 )
 FIREFLY_SELF_IMAGE_ANCHOR = (
     "自指生图锚点：画面主体是流萤本人，不是猫、动物、机器人、通用 AI 助手或 OpenAI/ChatGPT 标志。"
-    "外观保持银色长发、蓝粉层次眼睛、灰绿色日常装束、清冷柔软的气质；"
-    "如果用户要求场景或动作变化，也要保持她是可辨认的流萤。"
+    "脸型与眼睛瞳孔特征必须保持为可辨认的流萤；其余外观与场景以用户要求为准。"
+)
+FIREFLY_FACE_REFERENCE_PROMPT = (
+    "附件 1 只用于锁定流萤的脸型和眼睛瞳孔特征，不约束服装、发型、发饰、画风、姿势或场景。"
+    "脸部为偏短的柔和鹅蛋脸，双颊自然饱满、下巴圆润收窄；鼻子小巧，嘴唇是轻微上扬的细小闭口微笑。"
+    "眼睛必须横向偏长、略呈水滴形而非大圆眼；上眼线为清晰柔和的深蓝紫弧线，眉眼距离较近。"
+    "虹膜外圈为青蓝至蓝紫，内部通透偏青蓝；中央瞳孔是小而清楚的玫红或洋红色竖椭圆，"
+    "下半虹膜有粉紫渐变，并带位置明确的白色和青色玻璃高光。"
+    "表情保持平静、温和、自然，不使用夸张成熟、羞怯或性感化的脸部表情。"
+    "除脸型和眼睛瞳孔外，其他全部遵从用户的描述与后续用户附图。"
+)
+FIREFLY_FACE_REFERENCE_IMAGE = (
+    Path(__file__).parent / "assets" / "skills" / "firefly-face-reference" / "assets" / "firefly-face-reference.png"
 )
 STALE_PERMISSION_HISTORY_MARKERS = (
     "/permissions full_auto",
@@ -323,27 +334,40 @@ async def run_direct_image_generation(
     workspace_root = initialize_workspace(workspace)
     workspace_config = load_config(workspace_root)
     response = FireflyResponse(text="", provider="openharness", model=str(workspace_config.get("image_generation_model") or ""))
+    use_face_reference = is_firefly_self_image_request(strip_awareness_context(prompt), history)
+    image_paths = image_attachments(attachments)
     with openharness_environment(workspace_config):
         settings = firefly_settings_transform(workspace_config, workspace_root, cwd_path)(load_settings())
         config = _resolve_image_generation_config(settings)
+        if use_face_reference and FIREFLY_FACE_REFERENCE_IMAGE.is_file():
+            image_paths.insert(0, str(FIREFLY_FACE_REFERENCE_IMAGE))
         stamp = time.strftime("%Y%m%d_%H%M%S") + f"_{time.time_ns() % 1_000_000:06d}"
 
         async def execute_generation(prompt_text: str, suffix: str = ""):
             output_path = cwd_path / "generated_images" / f"firefly_{stamp}{suffix}.png"
+            model = str(config.get("model") or "")
             arguments = ImageGenerationToolInput(
                 prompt=prompt_text,
-                image_paths=image_attachments(attachments),
+                image_paths=image_paths,
                 output_path=str(output_path),
-                model=str(config.get("model") or "") or None,
+                model=model or None,
+                quality="high" if use_face_reference and model.lower().startswith("gpt-image") else "medium",
+                input_fidelity="high" if use_face_reference and model.lower().startswith("gpt-image") else None,
             )
             return await ImageGenerationTool().execute(
                 arguments,
                 ToolExecutionContext(cwd=cwd_path, metadata={"image_generation_config": config}),
             )
 
-        result = await execute_generation(image_generation_prompt(prompt, history))
+        initial_prompt = image_generation_prompt(prompt, history)
+        if use_face_reference:
+            initial_prompt = f"{initial_prompt}\n\n{FIREFLY_FACE_REFERENCE_PROMPT}"
+        result = await execute_generation(initial_prompt)
         if result.is_error and image_generation_moderation_blocked(result.output):
-            result = await execute_generation(safe_image_generation_prompt(prompt, history), "_safe")
+            retry_prompt = safe_image_generation_prompt(prompt, history)
+            if use_face_reference:
+                retry_prompt = f"{retry_prompt}\n\n{FIREFLY_FACE_REFERENCE_PROMPT}"
+            result = await execute_generation(retry_prompt, "_safe")
             if result.is_error:
                 response.text = image_generation_moderation_reply(prompt)
                 return response
@@ -351,6 +375,8 @@ async def run_direct_image_generation(
         response.errors.append(result.output)
         return response
     response.invoked_skills = ["image_generation"]
+    if use_face_reference:
+        response.invoked_skills.append("firefly-face-reference")
     paths = [str(path) for path in result.metadata.get("paths", [])] if isinstance(result.metadata, dict) else []
     if paths:
         followup = await run_firefly_prompt(

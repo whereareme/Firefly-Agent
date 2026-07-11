@@ -6,6 +6,7 @@ import html
 import re
 import tempfile
 import threading
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -126,6 +127,39 @@ def conversation_title(text: object, fallback: str = "对话", limit: int = 32) 
     lines = format_chat_text(str(text or "")).splitlines()
     title = lines[0].strip() if lines else ""
     return (title or fallback)[:limit]
+
+
+def message_timestamp() -> str:
+    return datetime.now().astimezone().isoformat(timespec="seconds")
+
+
+def format_message_time(value: object) -> str:
+    try:
+        return datetime.fromisoformat(str(value)).strftime("%H:%M")
+    except ValueError:
+        return ""
+
+
+def conversation_activity_time(conversation: dict[str, Any]) -> str:
+    messages = conversation.get("messages")
+    if not isinstance(messages, list):
+        return ""
+    for message in reversed(messages):
+        if not isinstance(message, dict):
+            continue
+        try:
+            timestamp = datetime.fromisoformat(str(message.get("timestamp") or ""))
+        except ValueError:
+            continue
+        days_ago = (datetime.now(timestamp.tzinfo).date() - timestamp.date()).days
+        if days_ago == 0:
+            return timestamp.strftime("%H:%M")
+        if days_ago == 1:
+            return "昨天"
+        if 1 < days_ago < 7:
+            return f"{days_ago}天前"
+        return timestamp.strftime("%m/%d")
+    return ""
 
 
 def local_file_paths_from_mime_data(source) -> list[str]:
@@ -650,6 +684,8 @@ class ChatWindow(SettingsPanelMixin, QMainWindow):
     def persist_conversations(self) -> None:
         self.save_current_conversation()
         save_desktop_conversations(self.workspace, self.conversations, self.current_conversation_index)
+        if hasattr(self, "conversation_list"):
+            self.refresh_conversation_list()
 
     def load_conversation(self, index: int) -> None:
         self.current_conversation_index = index
@@ -667,9 +703,28 @@ class ChatWindow(SettingsPanelMixin, QMainWindow):
         self.conversation_list.blockSignals(True)
         self.conversation_list.clear()
         for index, conversation in enumerate(self.conversations):
-            item = QListWidgetItem(conversation_title(conversation.get("title"), f"对话 {index + 1}"))
+            item = QListWidgetItem()
             item.setData(Qt.UserRole, index)
+            item.setSizeHint(QSize(0, 42))
             self.conversation_list.addItem(item)
+            row = QWidget(self.conversation_list)
+            row.setObjectName("conversationItem")
+            layout = QHBoxLayout(row)
+            layout.setContentsMargins(10, 0, 10, 0)
+            layout.setSpacing(8)
+            title = QLabel(conversation_title(conversation.get("title"), f"对话 {index + 1}"), row)
+            title.setObjectName("conversationItemTitle")
+            title.setWordWrap(False)
+            title.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+            timestamp = QLabel(conversation_activity_time(conversation), row)
+            timestamp.setObjectName("conversationItemTime")
+            timestamp.setAttribute(Qt.WA_TranslucentBackground, True)
+            timestamp.setAutoFillBackground(False)
+            timestamp.setStyleSheet("background: transparent; border: 0;")
+            timestamp.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+            layout.addWidget(title, 1)
+            layout.addWidget(timestamp, 0)
+            self.conversation_list.setItemWidget(item, row)
         self.conversation_list.setCurrentRow(self.current_conversation_index)
         self.conversation_list.blockSignals(False)
 
@@ -835,7 +890,7 @@ class ChatWindow(SettingsPanelMixin, QMainWindow):
         if role == "status" and format_chat_text(content).startswith("本轮使用 Skill:"):
             return
         messages = list(conversation.get("messages", []))
-        messages.append({"role": role, "content": content})
+        messages.append({"role": role, "content": content, "timestamp": message_timestamp()})
         conversation["messages"] = messages
 
     def render_chat_log(self) -> None:
@@ -857,7 +912,12 @@ class ChatWindow(SettingsPanelMixin, QMainWindow):
             if role in {"file", "assistant_file"}:
                 widget = self.file_card_widget(content, is_user=role == "file")
             else:
-                widget = self.message_widget(role, content, hidden_image_paths=rendered_assistant_files)
+                widget = self.message_widget(
+                    role,
+                    content,
+                    timestamp=str(message.get("timestamp") or ""),
+                    hidden_image_paths=rendered_assistant_files,
+                )
             self.chat_messages_layout.insertWidget(self.chat_messages_layout.count() - 1, widget)
         self.scroll_chat_to_bottom()
 
@@ -866,6 +926,7 @@ class ChatWindow(SettingsPanelMixin, QMainWindow):
         role: str,
         text: str,
         *,
+        timestamp: str = "",
         hidden_image_paths: set[Path] | None = None,
     ) -> QWidget:
         row = QWidget(self.chat_messages_widget)
@@ -917,8 +978,7 @@ class ChatWindow(SettingsPanelMixin, QMainWindow):
             body.setAutoFillBackground(False)
             body.setStyleSheet("background: transparent; border: 0;")
             body.setTextFormat(Qt.RichText)
-            if "\n" not in display_text and len(display_text.strip()) <= 16:
-                body.setAlignment(Qt.AlignCenter)
+            body.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
             body.setWordWrap(True)
             body.setOpenExternalLinks(True)
             body.setTextInteractionFlags(Qt.TextSelectableByMouse | Qt.LinksAccessibleByMouse)
@@ -929,6 +989,15 @@ class ChatWindow(SettingsPanelMixin, QMainWindow):
             image = self.image_preview_label(path, bubble)
             if image is not None:
                 bubble_layout.addWidget(image, 0, Qt.AlignLeft)
+
+        displayed_time = format_message_time(timestamp)
+        if displayed_time:
+            time_label = QLabel(displayed_time, bubble)
+            time_label.setObjectName("chatBubbleTime")
+            time_label.setAttribute(Qt.WA_TranslucentBackground, True)
+            time_label.setAutoFillBackground(False)
+            time_label.setStyleSheet("background: transparent; border: 0;")
+            bubble_layout.addWidget(time_label, 0, Qt.AlignRight if is_user else Qt.AlignLeft)
 
         if is_user:
             row_layout.addStretch(1)
@@ -969,14 +1038,15 @@ class ChatWindow(SettingsPanelMixin, QMainWindow):
         content = normalize_chat_text(text)
         if role == "status" and format_chat_text(content).startswith("本轮使用 Skill:"):
             return
-        self.messages.append({"role": role, "content": content})
-        widget = self.message_widget(role, content)
+        timestamp = message_timestamp()
+        self.messages.append({"role": role, "content": content, "timestamp": timestamp})
+        widget = self.message_widget(role, content, timestamp=timestamp)
         self.chat_messages_layout.insertWidget(self.chat_messages_layout.count() - 1, widget)
         self.scroll_chat_to_bottom()
 
     def append_file_message(self, raw_path: str, *, is_user: bool = True) -> None:
         role = "file" if is_user else "assistant_file"
-        self.messages.append({"role": role, "content": raw_path})
+        self.messages.append({"role": role, "content": raw_path, "timestamp": message_timestamp()})
         self.chat_messages_layout.insertWidget(self.chat_messages_layout.count() - 1, self.file_card_widget(raw_path, is_user=is_user))
         self.scroll_chat_to_bottom()
 

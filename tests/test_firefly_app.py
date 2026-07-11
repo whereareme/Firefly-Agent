@@ -36,7 +36,7 @@ from firefly.context import (
 from firefly import desktop_tools as desktop_tools_module
 from firefly.desktop_tools import DesktopScreenshotInput, DesktopScreenshotTool, DesktopWindowInput, DesktopWindowTool
 from firefly.desktop.chat_rendering import ChatBubble, chat_bubble_colors, format_chat_text, render_chat_html, render_chat_inline
-from firefly.desktop.chat_window import ModelSelector, chat_bubble_max_width, conversation_title, local_file_paths_from_mime_data, local_permission_mode_command, remove_temporary_context_snapshot, reply_image_paths, strip_generated_image_notice
+from firefly.desktop.chat_window import ModelSelector, chat_bubble_max_width, conversation_activity_time, conversation_title, format_message_time, local_file_paths_from_mime_data, local_permission_mode_command, remove_temporary_context_snapshot, reply_image_paths, strip_generated_image_notice
 from firefly.desktop.music import DEFAULT_STARFIRE_SONG, DEFAULT_STARFIRE_SONG_URL, starfire_music_tracks
 from firefly.desktop.settings_panel import SettingsComboBox, SettingsPanelMixin, SlidingToggle, fetch_openai_compatible_models
 from firefly.desktop.styles import chat_style_for_mode, chat_viewport_style_for_mode, normalized_theme_mode
@@ -74,6 +74,11 @@ def test_firefly_persona_loads() -> None:
     assert "emoji 可以少量使用" in character.system_prompt()
     assert "流萤是云子" in character.system_prompt()
     assert character.validate_reply("作为一个AI") == ["contains forbidden phrase: 作为一个AI"]
+
+
+def test_firefly_chat_timestamps_format_for_bubbles_and_conversations() -> None:
+    assert format_message_time("2026-07-11T10:24:00+08:00") == "10:24"
+    assert conversation_activity_time({"messages": [{"timestamp": "not-a-time"}]}) == ""
 
 
 def test_firefly_task_worker_reports_results_and_errors() -> None:
@@ -475,6 +480,7 @@ def test_firefly_chat_messages_render_markdown_as_rich_text() -> None:
 
     assert "render_chat_html(" in text
     assert "body.setTextFormat(Qt.RichText)" in text
+    assert "body.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)" in text
     assert "body.setOpenExternalLinks(True)" in text
 
 
@@ -744,7 +750,9 @@ def test_firefly_chat_window_routes_background_reply_to_original_conversation() 
 
             assert window.current_conversation_index == 1
             assert window.messages == []
-            assert source["messages"] == [{"role": "assistant", "content": "后台回复"}]
+            assert source["messages"][0]["role"] == "assistant"
+            assert source["messages"][0]["content"] == "后台回复"
+            assert source["messages"][0]["timestamp"]
             assert source["history"][-2:] == [
                 {"role": "user", "content": "第一条"},
                 {"role": "assistant", "content": "后台回复"},
@@ -1456,7 +1464,7 @@ def test_firefly_self_image_prompt_anchors_identity() -> None:
 
     assert "画面主体是流萤本人" in prompt
     assert "不是猫" in prompt
-    assert "银色长发" in prompt
+    assert "脸型与眼睛瞳孔特征" in prompt
 
 
 def test_firefly_implicit_self_image_prompt_anchors_identity() -> None:
@@ -1500,6 +1508,9 @@ def test_firefly_direct_image_generation_uses_tool_without_chat_planning(monkeyp
         output.parent.mkdir(parents=True, exist_ok=True)
         output.write_bytes(b"png")
         seen["prompt"] = arguments.prompt
+        seen["image_paths"] = arguments.image_paths
+        seen["quality"] = arguments.quality
+        seen["input_fidelity"] = arguments.input_fidelity
         return ToolResult("ok", metadata={"paths": [str(output)]})
 
     async def fake_followup(**kwargs):
@@ -1516,18 +1527,123 @@ def test_firefly_direct_image_generation_uses_tool_without_chat_planning(monkeyp
         assert response.errors == []
         assert response.invoked_skills == ["image_generation"]
         assert seen["prompt"] == "请生成一张图片"
+        assert seen["image_paths"] == []
         assert "请先看这张图片" in str(seen["followup_prompt"])
         assert seen["followup_attachments"]
         assert reply_image_paths(response.text, Path(tmp))
         assert strip_generated_image_notice(response.text) == "这是一张测试图。"
 
 
+def test_firefly_direct_image_generation_uses_bundled_face_reference(monkeypatch) -> None:
+    seen: dict[str, object] = {}
+
+    async def fake_execute(self, arguments, context):
+        del self, context
+        output = Path(arguments.output_path)
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_bytes(b"png")
+        seen["prompt"] = arguments.prompt
+        seen["image_paths"] = arguments.image_paths
+        return ToolResult("ok", metadata={"paths": [str(output)]})
+
+    async def fake_followup(**_kwargs):
+        return firefly_runtime.FireflyResponse(text="给你看。")
+
+    monkeypatch.setattr(firefly_runtime.ImageGenerationTool, "execute", fake_execute)
+    monkeypatch.setattr(firefly_runtime, "run_firefly_prompt", fake_followup)
+    with TemporaryDirectory() as tmp:
+        user_image = Path(tmp) / "pose.png"
+        user_image.write_bytes(b"png")
+        response = FireflyRuntime(cwd=tmp, workspace=Path(tmp) / ".firefly").chat(
+            "画一张流萤在窗边看书",
+            attachments=[str(user_image)],
+        )
+
+        assert "青蓝至蓝紫" in str(seen["prompt"])
+        assert "只用于锁定流萤的脸型和眼睛瞳孔特征" in str(seen["prompt"])
+        assert "不约束服装、发型、发饰、画风、姿势或场景" in str(seen["prompt"])
+        assert "横向偏长、略呈水滴形而非大圆眼" in str(seen["prompt"])
+        assert "玫红或洋红色竖椭圆" in str(seen["prompt"])
+        assert seen["image_paths"] == [
+            str(firefly_runtime.FIREFLY_FACE_REFERENCE_IMAGE),
+            str(user_image),
+        ]
+        assert response.invoked_skills == ["image_generation", "firefly-face-reference"]
+
+
+def test_firefly_direct_image_generation_uses_reference_for_pure_openai_generation(monkeypatch) -> None:
+    seen: dict[str, object] = {}
+
+    async def fake_execute(self, arguments, context):
+        del self, context
+        output = Path(arguments.output_path)
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_bytes(b"png")
+        seen["prompt"] = arguments.prompt
+        seen["image_paths"] = arguments.image_paths
+        seen["quality"] = arguments.quality
+        seen["input_fidelity"] = arguments.input_fidelity
+        return ToolResult("ok", metadata={"paths": [str(output)]})
+
+    async def fake_followup(**_kwargs):
+        return firefly_runtime.FireflyResponse(text="给你看。")
+
+    monkeypatch.setattr(firefly_runtime.ImageGenerationTool, "execute", fake_execute)
+    monkeypatch.setattr(firefly_runtime, "run_firefly_prompt", fake_followup)
+    monkeypatch.setattr(
+        firefly_runtime,
+        "_resolve_image_generation_config",
+        lambda _settings: {"provider": "openai", "model": "gpt-image-2"},
+    )
+    with TemporaryDirectory() as tmp:
+        response = FireflyRuntime(cwd=tmp, workspace=Path(tmp) / ".firefly").chat("画一张流萤在窗边看书")
+
+        assert "青蓝至蓝紫" in str(seen["prompt"])
+        assert seen["image_paths"] == [str(firefly_runtime.FIREFLY_FACE_REFERENCE_IMAGE)]
+        assert seen["quality"] == "high"
+        assert seen["input_fidelity"] == "high"
+        assert response.invoked_skills == ["image_generation", "firefly-face-reference"]
+
+
+def test_firefly_direct_image_generation_keeps_identity_when_reference_is_missing(monkeypatch) -> None:
+    seen: dict[str, object] = {}
+
+    async def fake_execute(self, arguments, context):
+        del self, context
+        output = Path(arguments.output_path)
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_bytes(b"png")
+        seen["prompt"] = arguments.prompt
+        seen["image_paths"] = arguments.image_paths
+        return ToolResult("ok", metadata={"paths": [str(output)]})
+
+    async def fake_followup(**_kwargs):
+        return firefly_runtime.FireflyResponse(text="给你看。")
+
+    monkeypatch.setattr(firefly_runtime.ImageGenerationTool, "execute", fake_execute)
+    monkeypatch.setattr(firefly_runtime, "run_firefly_prompt", fake_followup)
+    with TemporaryDirectory() as tmp:
+        user_image = Path(tmp) / "pose.png"
+        user_image.write_bytes(b"png")
+        monkeypatch.setattr(firefly_runtime, "FIREFLY_FACE_REFERENCE_IMAGE", Path(tmp) / "missing.png")
+        response = FireflyRuntime(cwd=tmp, workspace=Path(tmp) / ".firefly").chat(
+            "画一张流萤在窗边看书",
+            attachments=[str(user_image)],
+        )
+
+        assert "脸部为偏短的柔和鹅蛋脸" in str(seen["prompt"])
+        assert seen["image_paths"] == [str(user_image)]
+        assert response.invoked_skills == ["image_generation", "firefly-face-reference"]
+
+
 def test_firefly_direct_image_generation_retries_safe_prompt_after_moderation(monkeypatch) -> None:
     prompts: list[str] = []
+    image_paths: list[list[str]] = []
 
     async def fake_execute(self, arguments, context):
         del self, context
         prompts.append(arguments.prompt)
+        image_paths.append(arguments.image_paths)
         if len(prompts) == 1:
             return ToolResult("image_generation failed: moderation_blocked sexual safety system", is_error=True)
         output = Path(arguments.output_path)
@@ -1546,10 +1662,11 @@ def test_firefly_direct_image_generation_retries_safe_prompt_after_moderation(mo
         )
 
         assert response.errors == []
-        assert response.invoked_skills == ["image_generation"]
+        assert response.invoked_skills == ["image_generation", "firefly-face-reference"]
         assert len(prompts) == 2
         assert "完整、保守" in prompts[1]
         assert "不要裸露" in prompts[1]
+        assert image_paths == [[str(firefly_runtime.FIREFLY_FACE_REFERENCE_IMAGE)]] * 2
         assert strip_generated_image_notice(response.text) == "我换成了更日常的版本。"
 
 

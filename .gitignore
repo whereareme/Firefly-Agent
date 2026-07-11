@@ -32,6 +32,7 @@ frontend/terminal/node_modules/
 .firefly/
 .agents/
 .claude/
+.superpowers/
 .codex/
 .claude/.credentials.json
 .git-credentials

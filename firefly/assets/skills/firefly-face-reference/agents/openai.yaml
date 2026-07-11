@@ -1,0 +1,14 @@
+interface:
+  display_name: Firefly Face Reference
+  short_description: Use the saved Firefly face and eye reference
+  default_prompt: Use $firefly-face-reference when generating or editing Firefly images
+    so her face and eyes follow the saved reference.
+  icon_small: assets/icon.svg
+  icon_large: assets/icon.svg
+policy:
+  products:
+  - chatgpt
+  - codex
+  - api
+  - atlas
+  allow_implicit_invocation: true

@@ -179,6 +179,18 @@ QListWidget#conversationList::item:selected {
     border: 1px solid #66b8ae;
     font-weight: 700;
 }
+QWidget#conversationItem {
+    background: transparent;
+}
+QLabel#conversationItemTitle {
+    color: #496d68;
+    font-size: 13px;
+    font-weight: 600;
+}
+QLabel#conversationItemTime {
+    color: #71847f;
+    font-size: 11px;
+}
 QLabel#conversationHeading {
     color: #637c77;
     font-size: 12px;
@@ -573,6 +585,13 @@ QLabel#chatBubbleTextUser {
     font-weight: 400;
     padding: 0;
 }
+QLabel#chatBubbleTime {
+    background: transparent;
+    border: 0;
+    color: #6f8984;
+    font-size: 10px;
+    padding: 0;
+}
 QLabel#chatStatusMessage {
     background: #f0f8f7;
     border: 1px solid #d5e6e3;
@@ -818,6 +837,13 @@ QPushButton#navButton,
 QPushButton#settingsTab,
 QListWidget#conversationList {
     color: #acd0c8;
+}
+QLabel#conversationItemTitle {
+    color: #c4e1da;
+}
+QLabel#conversationItemTime,
+QLabel#chatBubbleTime {
+    color: #9bbdb5;
 }
 QPushButton#railToggle:hover,
 QPushButton#navButton:hover,

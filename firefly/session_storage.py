@@ -97,7 +97,11 @@ def _sanitize_chat_messages(raw: object) -> list[dict[str, str]]:
         role = str(item.get("role") or "").strip()
         content = item.get("content")
         if role and content is not None:
-            messages.append({"role": role, "content": str(content)})
+            message = {"role": role, "content": str(content)}
+            timestamp = str(item.get("timestamp") or "").strip()
+            if timestamp:
+                message["timestamp"] = timestamp
+            messages.append(message)
     return messages
 
 
