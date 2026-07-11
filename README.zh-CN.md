@@ -1,417 +1,62 @@
-# <img src="assets/logo.png" alt="OpenHarness" width="40" style="vertical-align: middle;"> `oh` — OpenHarness 中文说明
+# Firefly Agent
 
-<p align="center">
-  <a href="README.md"><strong>English</strong></a> ·
-  <a href="README.zh-CN.md"><strong>简体中文</strong></a>
-</p>
+Firefly Agent 是一个以流萤陪伴体验为核心的本地桌面 AI 项目。
 
-**OpenHarness** 是一个面向开源社区的 Agent Harness。它提供轻量、可扩展、可检查的 Agent 基础设施，包括：
+它将 Live2D 形象和个人 Agent 能力带到桌面上。用户可以和流萤聊天、分享日常、持续互动，也可以开启长期记忆，让她记住用户主动留下的偏好和重要信息。除了陪伴功能，项目还支持读取文件、总结文档、资料索引、联网检索、技能加载，以及在明确权限下处理简单的桌面任务。
 
-- Agent loop
-- tools / skills / plugins
-- memory / session resume
-- permissions / hooks
-- multi-agent coordination
-- provider workflows
-- React TUI
-- `ohmo` personal-agent app
+本项目是非官方同人项目，不属于 HoYoverse 官方应用或服务。
 
----
+English: [README.md](README.md)
 
-## 最新更新
+## 主要功能
 
-### Unreleased · Dry-run 安全预览
+- Live2D 桌面陪伴、聊天与互动
+- 以流萤为灵感的人格表达和可配置对话行为
+- 历史会话保存与可选长期记忆
+- 文件上传、文档读取、本地资料索引和内容总结
+- 可选联网检索，获取外部最新信息
+- 技能库、模型接口和权限设置
+- 可选 Windows 桌面感知和简单电脑控制
+- 本地工作区与会话存储
 
-- 新增 `oh --dry-run`，可以在**不执行模型、不执行工具、不 spawn subagent** 的前提下，预览当前会话会使用的配置、skills、commands、tools 和 MCP 配置。
-- Dry-run 会给出 `ready / warning / blocked` 结论，并直接告诉你下一步该做什么，例如先修认证、先修 MCP 配置，或者可以直接运行。
-- 对普通 prompt，会给出可能命中的 skills / tools；对 slash command，会展示它更偏只读还是会改本地状态。
-
-### 2026-04-06 · v0.1.2
-
-- 新增统一配置入口 `oh setup`
-- provider 配置从“auth -> provider -> model”收敛成 workflow 视角
-- Anthropic/OpenAI 兼容接口支持 profile 级凭据，不再强制共用一把全局 key
-- 新增 `ohmo` personal-agent app
-- `ohmo` 使用 `~/.ohmo` 作为 home workspace，支持 gateway、bootstrap prompts 和交互式 channel 配置
-
----
+项目基于 [OpenHarness](https://github.com/HKUDS/OpenHarness) 构建，由 OpenHarness 提供 Agent 循环、工具、技能、记忆、模型接口、权限和多 Agent 等底层能力。
 
 ## 快速开始
 
-### 一键安装
+运行环境：Windows、Python 3.10 及以上，以及 `uv`。
 
-```bash
-curl -fsSL https://raw.githubusercontent.com/HKUDS/OpenHarness/main/scripts/install.sh | bash
-```
-
-常用安装参数：
-
-- `--from-source`：从源码安装，适合贡献者
-- `--with-channels`：一并安装 IM channel 依赖
-
-例如：
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/HKUDS/OpenHarness/main/scripts/install.sh | bash -s -- --from-source --with-channels
-```
-
-### 本地运行
-
-```bash
-git clone https://github.com/HKUDS/OpenHarness.git
-cd OpenHarness
+```powershell
 uv sync --extra dev
-uv run oh
+uv run firefly check
+uv run firefly desktop
 ```
 
----
+Windows 也可以直接运行：
 
-## 配置模型与 Provider
-
-现在最推荐的入口是：
-
-```bash
-oh setup
+```powershell
+.\启动流萤桌面.cmd
 ```
 
-`oh setup` 会按下面的顺序引导：
+`firefly check` 会在启动前检查工作区、人格数据、Live2D 资源、Qt 依赖、文档处理能力、资源归属说明和锁定文件。
 
-1. 选择一个 workflow
-2. 如果需要，完成认证
-3. 选择具体后端 preset
-4. 确认模型
-5. 保存并激活 profile
+## 项目结构
 
-当前内置 workflow 包括：
-
-- `Anthropic-Compatible API`
-- `Claude Subscription`
-- `OpenAI-Compatible API`
-- `Codex Subscription`
-- `GitHub Copilot`
-
-### Anthropic-Compatible API
-
-适合这类后端：
-
-- Claude 官方 API
-- Moonshot / Kimi
-- Zhipu / GLM
-- MiniMax
-- 其他 Anthropic-compatible endpoint
-
-### OpenAI-Compatible API
-
-适合这类后端：
-
-- OpenAI 官方 API
-- OpenRouter
-- DashScope
-- DeepSeek
-- GitHub Models
-- SiliconFlow
-- Google Gemini
-- Groq
-- Ollama
-- 其他 OpenAI-compatible endpoint
-
-### 常用命令
-
-```bash
-# 统一配置入口
-oh setup
-
-# 查看已有 workflow/profile
-oh provider list
-
-# 切换当前 workflow
-oh provider use codex
-
-# 查看认证状态
-oh auth status
+```text
+firefly/                 流萤桌面应用与运行时
+firefly/assets/           Live2D、界面资源和归属说明
+src/openharness/          Firefly 使用的 Agent 基础设施
+tests/                    OpenHarness 与 Firefly 测试
+启动流萤桌面.cmd           Windows 桌面启动脚本
 ```
 
-### 高级：添加自定义兼容接口
+## 设计方向
 
-如果内置 preset 不够，可以直接新增 profile：
+Firefly Agent 的定位是“陪伴优先，工具辅助”。Live2D 形象、说话方式、长期记忆和互动体验应该让用户感到自然、亲近和连续；文件处理、联网、技能和任务执行，则负责让这份陪伴在学习、工作和日常使用中真正有帮助。
 
-```bash
-oh provider add my-endpoint \
-  --label "My Endpoint" \
-  --provider anthropic \
-  --api-format anthropic \
-  --auth-source anthropic_api_key \
-  --model my-model \
-  --base-url https://example.com/anthropic
-```
+## 参考与归属
 
-这一版开始，兼容接口可以按 profile 绑定凭据。  
-也就是说，`Kimi`、`GLM`、`MiniMax` 这类 Anthropic-compatible 后端，不需要再共用一把全局 `anthropic` key。
+- Live2D 和项目内资源归属：[firefly/assets/ATTRIBUTION.md](firefly/assets/ATTRIBUTION.md)
+- Agent 底层框架：[OpenHarness](https://github.com/HKUDS/OpenHarness)
+- 角色灵感：《崩坏：星穹铁道》中的流萤
 
----
-
-## 交互模式与 TUI
-
-运行：
-
-```bash
-oh
-```
-
-你会得到 React/Ink TUI，支持：
-
-- `/` 命令选择器
-- 交互式权限确认
-- `/model` 模型切换
-- `/permissions` 权限模式切换
-- `/resume` 会话恢复
-- `/provider` workflow 选择
-
-非交互模式也支持：
-
-```bash
-oh -p "Explain this repository"
-oh -p "List all functions in main.py" --output-format json
-oh -p "Fix the bug" --output-format stream-json
-```
-
-### Dry-run 安全预览
-
-如果你想先看 OpenHarness **会怎么跑**，但又不想真的执行模型或工具，可以用：
-
-```bash
-# 预览交互会话本身
-oh --dry-run
-
-# 预览一个普通 prompt
-oh --dry-run -p "Review this bug fix and grep for failing tests"
-
-# 预览 slash command
-oh --dry-run -p "/plugin list"
-
-# 输出结构化 JSON，方便脚本或 channel 使用
-oh --dry-run -p "Explain this repository" --output-format json
-```
-
-Dry-run 的边界是明确的：
-
-- **不会**调用模型
-- **不会**执行 tools
-- **不会**启动 subagent
-- **不会**连接 MCP server
-- **会**解析 settings、auth 状态、system prompt、skills、commands、tools，以及明显错误的 MCP 配置
-
-Readiness 结论说明：
-
-- `ready`：当前配置基本可直接运行
-- `warning`：能解析会话，但仍有重要问题需要先处理，比如 MCP 配置错误或后续模型调用缺认证
-- `blocked`：按当前状态直接运行会失败，比如 slash command 不存在，或者普通 prompt 无法解析 runtime client
-
-Dry-run 输出里的 `next actions` 会直接给出下一步建议，例如：
-
-- 先执行 `oh auth login`
-- 先修或禁用坏掉的 MCP 配置
-- 直接运行 `oh -p "..."` 或进入 `oh`
-
----
-
-## Provider 兼容性概览
-
-OpenHarness 现在把 provider 视为 **workflow + profile**，而不是只暴露底层协议名。
-
-| Workflow | 说明 |
-|----------|------|
-| `Anthropic-Compatible API` | Anthropic 风格接口，适合 Claude/Kimi/GLM/MiniMax 等 |
-| `Claude Subscription` | 复用本地 `~/.claude/.credentials.json` |
-| `OpenAI-Compatible API` | OpenAI 风格接口，适合 OpenAI/OpenRouter/各种兼容网关 |
-| `Codex Subscription` | 复用本地 `~/.codex/auth.json` |
-| `GitHub Copilot` | GitHub Copilot OAuth workflow |
-
-日常推荐用法：
-
-```bash
-oh setup
-oh provider list
-oh provider use <profile>
-```
-
----
-
-## `ohmo` Personal Agent
-
-`ohmo` 是基于 OpenHarness 的 personal-agent app，不是 core 的一个 mode。
-
-### 初始化
-
-```bash
-ohmo init
-```
-
-这会创建：
-
-- `~/.ohmo/soul.md`
-- `~/.ohmo/identity.md`
-- `~/.ohmo/user.md`
-- `~/.ohmo/BOOTSTRAP.md`
-- `~/.ohmo/memory/`
-- `~/.ohmo/gateway.json`
-
-其中：
-
-- `soul.md`：长期人格与行为原则
-- `identity.md`：`ohmo` 自己是谁
-- `user.md`：用户画像、偏好、关系信息
-- `BOOTSTRAP.md`：首轮 landing / onboarding ritual
-- `memory/`：personal memory
-- `gateway.json`：gateway 的 profile 和 channel 配置
-
-### 配置
-
-```bash
-ohmo config
-```
-
-`ohmo config` 会用和 `oh setup` 一致的 workflow 语言来配置 gateway，例如：
-
-- `Anthropic-Compatible API`
-- `Claude Subscription`
-- `OpenAI-Compatible API`
-- `Codex Subscription`
-- `GitHub Copilot`
-
-目前 `ohmo init` / `ohmo config` 已支持引导式配置这些 channel：
-
-- Telegram
-- Slack
-- Discord
-- Feishu
-
-如果 gateway 已经在运行，配置完成后也可以直接选择是否重启。
-
-### 运行
-
-```bash
-# 运行 personal agent
-ohmo
-
-# 前台运行 gateway
-ohmo gateway run
-
-# 查看 gateway 状态
-ohmo gateway status
-
-# 重启 gateway
-ohmo gateway restart
-```
-
----
-
-## OpenHarness 的核心能力
-
-### Agent Loop
-
-- streaming tool-call cycle
-- tool execution / observation / loop
-- retry + exponential backoff
-- token counting 与成本跟踪
-
-### Tools / Skills / Plugins
-
-- 43+ tools
-- Markdown skills 按需加载
-- 插件生态
-- 兼容 `anthropics/skills`
-- 兼容 Claude-style plugins
-
-### Memory / Session
-
-- `CLAUDE.md` 自动发现与注入
-- `MEMORY.md` 持久记忆
-- session resume
-- auto-compact
-
-### Governance
-
-- 多级 permission mode
-- path rules
-- denied commands
-- hooks
-- interactive approval
-
-### Multi-Agent
-
-- subagent spawning
-- team registry
-- task lifecycle
-- background task execution
-
----
-
-## 常见命令
-
-### `oh`
-
-```bash
-oh setup
-oh provider list
-oh provider use codex
-oh auth status
-oh -p "Explain this codebase"
-oh
-```
-
-### `ohmo`
-
-```bash
-ohmo init
-ohmo config
-ohmo
-ohmo gateway run
-ohmo gateway status
-ohmo gateway restart
-```
-
----
-
-## 测试
-
-```bash
-uv run pytest -q
-python scripts/test_harness_features.py
-python scripts/test_real_skills_plugins.py
-```
-
----
-
-## 贡献
-
-欢迎贡献：
-
-- tools
-- skills
-- plugins
-- providers
-- multi-agent coordination
-- tests
-- 文档与中文翻译
-
-开发环境：
-
-```bash
-git clone https://github.com/HKUDS/OpenHarness.git
-cd OpenHarness
-uv sync --extra dev
-uv run pytest -q
-```
-
-更多信息：
-
-- [贡献指南](CONTRIBUTING.md)
-- [更新日志](CHANGELOG.md)
-- [Showcase](docs/SHOWCASE.md)
-
----
-
-## License
-
-MIT，见 [LICENSE](LICENSE)。
+重新发布项目或内置资源前，请先确认归属说明和许可证要求。
