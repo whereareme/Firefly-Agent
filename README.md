@@ -8,6 +8,8 @@ This is an unofficial fan-made project, not an official HoYoverse application or
 
 中文说明：[README.zh-CN.md](README.zh-CN.md)
 
+Latest update report: [UPDATE_REPORT_2026-07-13.md](docs/UPDATE_REPORT_2026-07-13.md). It covers the six default sticker emotions, the Companion Imprint Sidecar, privacy notes, and test results.
+
 ## What It Does
 
 - Live2D desktop companion with chat and interaction
