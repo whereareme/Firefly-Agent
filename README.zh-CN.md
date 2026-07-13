@@ -17,6 +17,8 @@ English: [README.md](README.md)
 - 可选联网检索，获取外部最新信息
 - 技能库、模型接口和权限设置
 - 可选 Windows 桌面感知和简单电脑控制
+- 默认启用六种低频互动表情：开心、害羞、惊讶、担心、困倦和无奈
+- 可选本地“同行印记” Sidecar，用于关系上下文和用户确认后的事件记录
 - 本地工作区与会话存储
 
 项目基于 [OpenHarness](https://github.com/HKUDS/OpenHarness) 构建，由 OpenHarness 提供 Agent 循环、工具、技能、记忆、模型接口、权限和多 Agent 等底层能力。
@@ -39,6 +41,8 @@ Windows 也可以直接运行：
 
 `firefly check` 会在启动前检查工作区、人格数据、Live2D 资源、Qt 依赖、文档处理能力、资源归属说明和锁定文件。
 
+“同行印记” Sidecar 已包含在 `firefly-relationship-gateway/` 目录中。它只监听本机回环地址，转发现有模型授权但不保存 API Key，并且只在用户确认后将关系事件写入本地。它的 `config.json` 和 `data/` 目录不会提交到 Git。
+
 ## 配置与隐私
 
 API Key、自定义模型 Base URL、EverOS 服务地址、聊天记录、长期记忆、截图和生成文件都属于本地配置，应在用户自己的电脑上填写，不应随项目发布。仓库只保留非敏感的模型服务默认配置，以及启用记忆服务时使用的本地 EverOS 回退地址。
@@ -50,6 +54,7 @@ API Key、自定义模型 Base URL、EverOS 服务地址、聊天记录、长期
 ```text
 firefly/                 流萤桌面应用与运行时
 firefly/assets/           Live2D、界面资源和归属说明
+firefly-relationship-gateway/  同行印记 Sidecar
 src/openharness/          Firefly 使用的 Agent 基础设施
 tests/                    OpenHarness 与 Firefly 测试
 启动流萤桌面.cmd           Windows 桌面启动脚本

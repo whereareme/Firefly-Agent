@@ -206,6 +206,7 @@ class SettingsPanelMixin:
         self.settings_stack.addWidget(self.build_files_panel())
         self.settings_stack.addWidget(self.build_web_search_panel())
         self.settings_stack.addWidget(self.build_memory_panel())
+        self.settings_stack.addWidget(self.build_companion_imprint_panel())
         self.settings_stack.addWidget(self.build_skills_panel())
         self.settings_stack.addWidget(self.build_appearance_panel())
         self.settings_stack.addWidget(self.build_computer_control_panel())
@@ -228,6 +229,7 @@ class SettingsPanelMixin:
         self.files_settings_button = QPushButton("资料舱", nav)
         self.web_search_settings_button = QPushButton("星网检索", nav)
         self.memory_settings_button = QPushButton("记忆回廊", nav)
+        self.companion_imprint_settings_button = QPushButton("同行印记", nav)
         self.skills_settings_button = QPushButton("技能库", nav)
         self.appearance_settings_button = QPushButton("外观", nav)
         self.computer_control_settings_button = QPushButton("行动权限", nav)
@@ -236,6 +238,7 @@ class SettingsPanelMixin:
             self.files_settings_button,
             self.web_search_settings_button,
             self.memory_settings_button,
+            self.companion_imprint_settings_button,
             self.skills_settings_button,
             self.appearance_settings_button,
             self.computer_control_settings_button,
@@ -245,6 +248,7 @@ class SettingsPanelMixin:
             "settings-library.svg",
             "settings-web.svg",
             "settings-memory.svg",
+            "settings-companion.svg",
             "settings-skills.svg",
             "settings-appearance.svg",
             "settings-permissions.svg",
@@ -572,6 +576,150 @@ class SettingsPanelMixin:
         self.memory_status_label.setText(f"{self.memory_summary()}\nEverOS 测试失败: {error}")
         self.everos_health_button.setEnabled(True)
 
+    def build_companion_imprint_panel(self) -> QWidget:
+        scroll = QScrollArea(self)
+        scroll.setObjectName("settingsScroll")
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        panel = QWidget(scroll)
+        panel.setObjectName("settingsCard")
+        layout = QVBoxLayout(panel)
+        layout.setContentsMargins(18, 16, 18, 28)
+        layout.setSpacing(16)
+        title = QLabel("同行印记", panel)
+        title.setObjectName("sectionTitle")
+        caption = QLabel("正常对话直连模型接口；本机 Sidecar 只同步已确认的共同经历，不保存供应商密钥。", panel)
+        caption.setObjectName("sectionCaption")
+        caption.setWordWrap(True)
+        layout.addWidget(title)
+        layout.addWidget(caption)
+
+        controller = self.companion_imprint_controller
+        self.companion_imprint_enabled_check = SlidingToggle(panel, "启用同行印记")
+        self.companion_imprint_enabled_check.setChecked(controller.enabled)
+        self.companion_imprint_port_input = QLineEdit(str(controller.port), panel)
+        self.companion_imprint_port_input.setValidator(QIntValidator(1, 65535, self.companion_imprint_port_input))
+        self.companion_imprint_project_path_input = QLineEdit(str(controller.project_path), panel)
+        self.companion_imprint_config_path_input = QLineEdit(str(controller.config_path), panel)
+        self.companion_imprint_status_label = QLabel(panel)
+        self.companion_imprint_status_label.setObjectName("modelSummary")
+        self.companion_imprint_status_label.setWordWrap(True)
+        self.companion_imprint_endpoint_label = QLabel(panel)
+        self.companion_imprint_endpoint_label.setObjectName("modelSummary")
+        self.companion_imprint_endpoint_label.setWordWrap(True)
+        self.companion_imprint_error_label = QLabel(panel)
+        self.companion_imprint_error_label.setObjectName("modelSummary")
+        self.companion_imprint_error_label.setWordWrap(True)
+
+        form = QFormLayout()
+        form.addRow("", self.companion_imprint_enabled_check)
+        form.addRow("端口", self.companion_imprint_port_input)
+        form.addRow("Sidecar 工程", self.companion_imprint_project_path_input)
+        form.addRow("配置文件", self.companion_imprint_config_path_input)
+        layout.addLayout(form)
+
+        action_row = QHBoxLayout()
+        action_row.setContentsMargins(0, 0, 0, 0)
+        self.companion_imprint_enable_button = QPushButton("启用", panel)
+        self.companion_imprint_start_button = QPushButton("启动", panel)
+        self.companion_imprint_stop_button = QPushButton("停止", panel)
+        self.companion_imprint_restart_button = QPushButton("重启", panel)
+        self.companion_imprint_save_button = QPushButton("保存设置", panel)
+        for button in (
+            self.companion_imprint_enable_button,
+            self.companion_imprint_start_button,
+            self.companion_imprint_stop_button,
+            self.companion_imprint_restart_button,
+        ):
+            button.setObjectName("secondaryButton")
+        self.companion_imprint_enable_button.clicked.connect(self.enable_companion_imprint)
+        self.companion_imprint_start_button.clicked.connect(self.start_companion_imprint)
+        self.companion_imprint_stop_button.clicked.connect(self.stop_companion_imprint)
+        self.companion_imprint_restart_button.clicked.connect(self.restart_companion_imprint)
+        self.companion_imprint_save_button.clicked.connect(self.save_companion_imprint_settings)
+        for button in (
+            self.companion_imprint_enable_button,
+            self.companion_imprint_start_button,
+            self.companion_imprint_stop_button,
+            self.companion_imprint_restart_button,
+        ):
+            action_row.addWidget(button)
+        action_row.addStretch(1)
+        action_row.addWidget(self.companion_imprint_save_button)
+        layout.addLayout(action_row)
+        layout.addWidget(self.companion_imprint_status_label)
+        layout.addWidget(self.companion_imprint_endpoint_label)
+        layout.addWidget(self.companion_imprint_error_label)
+        layout.addStretch(1)
+        scroll.setWidget(panel)
+
+        controller.status_changed.connect(self.refresh_companion_imprint_panel)
+        controller.error_changed.connect(self.refresh_companion_imprint_panel)
+        self.companion_imprint_enabled_check.toggled.connect(self.refresh_companion_imprint_panel)
+        self.refresh_companion_imprint_panel()
+        return scroll
+
+    def companion_imprint_settings(self, *, enabled: bool | None = None) -> bool:
+        controller = self.companion_imprint_controller
+        value = self.int_input_value(self.companion_imprint_port_input, controller.port, 1, 65535)
+        self.companion_imprint_port_input.setText(str(value))
+        return controller.configure(
+            enabled=self.companion_imprint_enabled_check.isChecked() if enabled is None else enabled,
+            port=value,
+            project_path=self.companion_imprint_project_path_input.text(),
+            config_path=self.companion_imprint_config_path_input.text(),
+        )
+
+    def save_companion_imprint_settings(self) -> None:
+        self.companion_imprint_settings()
+        self.refresh_companion_imprint_panel()
+
+    def enable_companion_imprint(self) -> None:
+        self.companion_imprint_enabled_check.setChecked(True)
+        if self.companion_imprint_settings(enabled=True):
+            self.companion_imprint_controller.enable()
+        self.refresh_companion_imprint_panel()
+
+    def start_companion_imprint(self) -> None:
+        self.companion_imprint_enabled_check.setChecked(True)
+        if self.companion_imprint_settings(enabled=True):
+            self.companion_imprint_controller.start()
+        self.refresh_companion_imprint_panel()
+
+    def stop_companion_imprint(self) -> None:
+        self.companion_imprint_controller.stop()
+        self.refresh_companion_imprint_panel()
+
+    def restart_companion_imprint(self) -> None:
+        self.companion_imprint_controller.restart()
+        self.refresh_companion_imprint_panel()
+
+    def refresh_companion_imprint_panel(self, *_arguments: object) -> None:
+        if not hasattr(self, "companion_imprint_status_label"):
+            return
+        controller = self.companion_imprint_controller
+        labels = {
+            "stopped": "已停止",
+            "starting": "正在启动",
+            "connected": "已连接",
+            "error": "需要处理",
+        }
+        running = controller.status in {"starting", "connected"}
+        enabled = self.companion_imprint_enabled_check.isChecked()
+        self.companion_imprint_status_label.setText(f"运行状态: {labels.get(controller.status, controller.status)}")
+        self.companion_imprint_endpoint_label.setText(f"印记服务: http://127.0.0.1:{controller.port}")
+        self.companion_imprint_error_label.setText(f"最近错误: {controller.error or '无'}")
+        self.companion_imprint_enable_button.setEnabled(not running)
+        self.companion_imprint_start_button.setEnabled(enabled and not running)
+        self.companion_imprint_stop_button.setEnabled(running)
+        self.companion_imprint_restart_button.setEnabled(enabled)
+        self.companion_imprint_save_button.setEnabled(not running)
+        self.companion_imprint_enabled_check.setEnabled(not running)
+        self.companion_imprint_port_input.setEnabled(not running)
+        self.companion_imprint_project_path_input.setEnabled(not running)
+        self.companion_imprint_config_path_input.setEnabled(not running)
+
     def build_skills_panel(self) -> QWidget:
         panel = QWidget(self)
         panel.setObjectName("settingsCard")
@@ -701,6 +849,8 @@ class SettingsPanelMixin:
         self.theme_mode_input.setCurrentIndex(max(index, 0))
         self.starfire_music_dir_input = QLineEdit(str(self.config.get("starfire_music_dir") or ""), panel)
         self.starfire_music_dir_input.setPlaceholderText("留空只使用内置曲目")
+        self.sticker_interaction_enabled_check = SlidingToggle(panel, "启用互动表情")
+        self.sticker_interaction_enabled_check.setChecked(bool(self.config.get("sticker_interaction_enabled", True)))
         music_dir_button = QPushButton("选择目录", panel)
         music_dir_button.setObjectName("secondaryButton")
         music_dir_button.clicked.connect(self.choose_starfire_music_dir)
@@ -711,6 +861,7 @@ class SettingsPanelMixin:
         form = QFormLayout()
         form.addRow("主题", self.theme_mode_input)
         form.addRow("星火旋律曲库", music_dir_row)
+        form.addRow("", self.sticker_interaction_enabled_check)
         layout.addLayout(form)
 
         save_button = QPushButton("保存并应用", panel)
@@ -726,13 +877,15 @@ class SettingsPanelMixin:
     def appearance_summary(self) -> str:
         mode = normalized_theme_mode(self.config.get("theme_mode"))
         music_dir = str(self.config.get("starfire_music_dir") or "").strip() or "未选择"
-        return f"当前主题: {THEME_LABELS[mode]}\n星火旋律曲库: {music_dir}（始终包含内置曲目）"
+        sticker_state = "已开启" if bool(self.config.get("sticker_interaction_enabled", True)) else "已关闭"
+        return f"当前主题: {THEME_LABELS[mode]}\n星火旋律曲库: {music_dir}（始终包含内置曲目）\n互动表情: {sticker_state}"
 
     def save_appearance_settings(self) -> None:
         self.config = {
             **self.config,
             "theme_mode": self.theme_mode_input.currentData() or "system",
             "starfire_music_dir": self.starfire_music_dir_input.text().strip(),
+            "sticker_interaction_enabled": self.sticker_interaction_enabled_check.isChecked(),
         }
         save_config(self.config, self.workspace)
         self.apply_theme()
@@ -1363,6 +1516,9 @@ class SettingsPanelMixin:
         }
         save_config(self.config, self.workspace)
         self.apply_runtime_config()
+        controller = getattr(self, "companion_imprint_controller", None)
+        if controller is not None:
+            controller.provider_changed(profile, self.current_profile_base_url())
         self.refresh_chat_model_selector()
         self.update_model_connection_state()
         self.model_status_label.setText("已保存并应用。")

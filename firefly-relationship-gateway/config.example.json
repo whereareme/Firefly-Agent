@@ -1,0 +1,6 @@
+{
+  "host": "127.0.0.1",
+  "port": 8787,
+  "upstream_base_url": "https://api.openai.com/v1",
+  "data_dir": "data"
+}

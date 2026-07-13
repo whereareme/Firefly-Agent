@@ -1,0 +1,5 @@
+config.json
+data/
+__pycache__/
+relationship_gateway/__pycache__/
+tests/__pycache__/

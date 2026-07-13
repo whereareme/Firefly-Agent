@@ -55,10 +55,12 @@ from firefly.runtime import (
     image_generation_followup_prompt,
     image_generation_prompt,
     image_generation_reply,
+    generate_firefly_sticker,
     should_direct_image_generation,
 )
 from firefly.session_storage import load_desktop_conversations, save_desktop_conversations
 from firefly.session_storage import NullSessionBackend
+from firefly.stickers import DEFAULT_STICKER_EMOTIONS, STICKER_EMOTIONS, extract_sticker_emotion, sticker_prompt, sticker_reply_instruction
 from firefly.workspace import initialize_workspace, load_config, workspace_health
 from openharness.config.settings import Settings
 from openharness.tools.base import ToolResult
@@ -79,6 +81,24 @@ def test_firefly_persona_loads() -> None:
 def test_firefly_chat_timestamps_format_for_bubbles_and_conversations() -> None:
     assert format_message_time("2026-07-11T10:24:00+08:00") == "10:24"
     assert conversation_activity_time({"messages": [{"timestamp": "not-a-time"}]}) == ""
+
+
+def test_firefly_sticker_helpers_parse_model_labels() -> None:
+    assert DEFAULT_STICKER_EMOTIONS == ("happy", "shy", "surprised", "worried", "sleepy", "speechless")
+    assert set(DEFAULT_STICKER_EMOTIONS) == set(STICKER_EMOTIONS)
+    assert extract_sticker_emotion("好的。[[sticker:happy]]") == ("好的。", "happy")
+    assert extract_sticker_emotion("普通回复") == ("普通回复", None)
+    assert "无文字" in sticker_prompt("shy")
+    assert "互动表情规则" in sticker_reply_instruction()
+
+
+def test_firefly_sticker_generation_reuses_cached_file(tmp_path) -> None:
+    workspace = initialize_workspace(tmp_path / ".firefly")
+    cached = workspace / "stickers" / "firefly_happy.png"
+    cached.parent.mkdir()
+    cached.write_bytes(b"png")
+
+    assert generate_firefly_sticker("happy", workspace=workspace) == str(cached)
 
 
 def test_firefly_task_worker_reports_results_and_errors() -> None:
@@ -180,6 +200,68 @@ def test_firefly_chat_model_selector_switches_profile_and_runtime(monkeypatch) -
     finally:
         host.chat_model_selector.deleteLater()
         host.model_input.deleteLater()
+        app.processEvents()
+
+
+def test_model_save_passes_the_resolved_profile_url_to_companion_imprint(monkeypatch) -> None:
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    from PySide6.QtWidgets import QApplication, QComboBox, QLabel, QLineEdit
+
+    app = QApplication.instance() or QApplication([])
+
+    class FakeAuthManager:
+        def use_profile(self, profile: str) -> None:
+            assert profile == "demo"
+
+        def update_profile(self, profile: str, **changes: object) -> None:
+            assert profile == "demo"
+            assert changes["base_url"] is None
+
+    class Controller:
+        calls: list[tuple[str, str]] = []
+
+        def provider_changed(self, profile: str, base_url: str) -> None:
+            self.calls.append((profile, base_url))
+
+    class Host(SettingsPanelMixin):
+        def __init__(self) -> None:
+            self.config: dict[str, object] = {"provider_profile": "demo", "model": "steady"}
+            self.workspace = Path(".")
+            self.model_input = QComboBox()
+            self.model_input.addItem("steady")
+            self.base_url_input = QLineEdit("")
+            self.api_key_input = QLineEdit("")
+            self.model_status_label = QLabel()
+            self.companion_imprint_controller = Controller()
+
+        def selected_profile_name(self) -> str:
+            return "demo"
+
+        def current_image_model_text(self) -> str:
+            return ""
+
+        def current_profile_base_url(self) -> str:
+            return "https://provider-default.example/v1"
+
+        def apply_runtime_config(self) -> None:
+            pass
+
+        def refresh_chat_model_selector(self) -> None:
+            pass
+
+        def update_model_connection_state(self) -> None:
+            pass
+
+    monkeypatch.setattr("firefly.desktop.settings_panel.AuthManager", FakeAuthManager)
+    monkeypatch.setattr("firefly.desktop.settings_panel.save_config", lambda _config, _workspace: None)
+    host = Host()
+    try:
+        host.save_model_settings()
+
+        assert host.companion_imprint_controller.calls == [("demo", "https://provider-default.example/v1")]
+    finally:
+        for widget in (host.model_input, host.base_url_input, host.api_key_input, host.model_status_label):
+            widget.deleteLater()
         app.processEvents()
 
 
@@ -330,7 +412,16 @@ def test_firefly_watch_does_not_interrupt_music_mood() -> None:
 def test_firefly_watch_bubble_strips_generated_image_notice() -> None:
     pet = (Path(__file__).resolve().parents[1] / "firefly" / "desktop" / "pet_window.py").read_text(encoding="utf-8")
 
-    assert "strip_generated_image_notice(reply)" in pet
+    assert "clean_live2d_reply(reply)" in pet
+
+
+def test_firefly_watch_bubble_filters_internal_reasoning() -> None:
+    from firefly.desktop.pet_window import clean_live2d_reply
+
+    leaked = 'thought The user says: "看看窗口". The image is a screenshot. Let\'s double-check formatting requirements.'
+
+    assert clean_live2d_reply(leaked) == ""
+    assert clean_live2d_reply("开拓者在看动画呀。[[sticker:happy]]") == "开拓者在看动画呀。"
 
 
 def test_firefly_watch_log_records_status_only(tmp_path) -> None:
@@ -422,8 +513,30 @@ def test_firefly_live2d_bubble_does_not_hard_truncate() -> None:
     assert "_raise_speech_bubble" in text
     assert "QTimer.singleShot(80, self._raise_speech_bubble)" in text
     assert "Qt.WindowDoesNotAcceptFocus" in text
+    assert "resetHeightConstraint" in text
     assert "SetWindowPos" not in text
     assert "HWND_TOPMOST" not in text
+
+
+def test_firefly_live2d_bubble_resets_height_after_long_reply() -> None:
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    from PySide6.QtWidgets import QApplication
+
+    from firefly.desktop.pet_window import Live2DSpeechBubble
+
+    app = QApplication.instance() or QApplication([])
+    bubble = Live2DSpeechBubble()
+    try:
+        bubble.setFixedHeight(260)
+        bubble.resetHeightConstraint()
+        bubble.setText("短句")
+        bubble.setBubbleWidth(260)
+
+        assert bubble.minimumHeight() == 0
+        assert bubble.height() < 260
+    finally:
+        bubble.deleteLater()
+        app.processEvents()
 
 
 def test_firefly_asset_attribution_exists() -> None:
@@ -446,6 +559,7 @@ def test_firefly_workspace_initializes() -> None:
         assert config["theme_mode"] == "system"
         assert config["firefly_watch_enabled"] is False
         assert config["chat_window_context_enabled"] is False
+        assert config["sticker_interaction_enabled"] is True
         assert config["chat_timeout_sec"] == 300
         assert config["starfire_music_dir"] == ""
         assert config["starfire_music_mode"] == "sequence"
@@ -605,6 +719,7 @@ def test_firefly_chat_window_opens_saved_conversation() -> None:
             assert isinstance(window.theme_mode_input, SettingsComboBox)
             assert isinstance(window.web_search_enabled_check, SlidingToggle)
             assert isinstance(window.memory_enabled_check, SlidingToggle)
+            assert isinstance(window.sticker_interaction_enabled_check, SlidingToggle)
             assert isinstance(window.skills_enabled_check, SlidingToggle)
             assert isinstance(window.library_index_check, SlidingToggle)
             window.add_library_location_item("C:/library", read=True, write=False)
@@ -1758,18 +1873,17 @@ def test_firefly_direct_image_generation_keeps_parenthetical_prompt_for_tool(mon
         assert strip_generated_image_notice(response.text) == "我正在灯下整理资料。"
 
 
-def test_firefly_plain_text_chat_uses_general_timeout(monkeypatch) -> None:
+def test_firefly_plain_text_chat_has_no_general_timeout(monkeypatch) -> None:
     async def slow_prompt(**_kwargs):
         await asyncio.sleep(0.02)
         return firefly_runtime.FireflyResponse(text="late")
 
     monkeypatch.setattr(firefly_runtime, "run_firefly_prompt", slow_prompt)
-    monkeypatch.setattr(firefly_runtime, "chat_timeout_seconds", lambda _config: 0.01)
     with TemporaryDirectory() as tmp:
         response = FireflyRuntime(cwd=tmp, workspace=Path(tmp) / ".firefly").chat("你好")
 
-        assert response.text == ""
-        assert response.errors == ["请求超时（0 秒）。请稍后重试；图片整理这类任务可以分批处理。"]
+        assert response.text == "late"
+        assert response.errors == []
 
 
 def test_firefly_normalizes_empty_assistant_error() -> None:
@@ -1778,17 +1892,15 @@ def test_firefly_normalizes_empty_assistant_error() -> None:
     ) == "模型这次没有返回可显示内容，本轮已跳过。请重试一次。"
 
 
-def test_firefly_chat_timeout_retries_without_awareness(monkeypatch) -> None:
+def test_firefly_chat_keeps_awareness_context_without_timeout_retry(monkeypatch) -> None:
     calls: list[dict[str, object]] = []
 
     async def slow_with_screenshot(**kwargs):
         calls.append(kwargs)
-        if kwargs.get("attachments"):
-            await asyncio.sleep(1)
+        await asyncio.sleep(0.02)
         return firefly_runtime.FireflyResponse(text="普通回复")
 
     monkeypatch.setattr(firefly_runtime, "run_firefly_prompt", slow_with_screenshot)
-    monkeypatch.setattr(firefly_runtime, "chat_timeout_seconds", lambda _config: 0.01)
     with TemporaryDirectory() as tmp:
         workspace = initialize_workspace(Path(tmp) / ".firefly")
         screenshot = workspace / "screenshots" / "chat_context_demo.png"
@@ -1800,8 +1912,23 @@ def test_firefly_chat_timeout_retries_without_awareness(monkeypatch) -> None:
         )
 
         assert response.text == "普通回复"
-        assert calls[-1]["prompt"] == "你好"
-        assert calls[-1]["attachments"] == []
+        assert len(calls) == 1
+        assert calls[0]["prompt"].startswith("你好")
+        assert calls[0]["attachments"] == [str(screenshot)]
+
+
+def test_firefly_image_generation_has_ten_minute_timeout(monkeypatch) -> None:
+    async def slow_image(**_kwargs):
+        await asyncio.sleep(0.02)
+        return firefly_runtime.FireflyResponse(text="late image")
+
+    monkeypatch.setattr(firefly_runtime, "run_direct_image_generation", slow_image)
+    monkeypatch.setattr(firefly_runtime, "IMAGE_GENERATION_TIMEOUT_SECONDS", 0.01)
+    with TemporaryDirectory() as tmp:
+        response = FireflyRuntime(cwd=tmp, workspace=Path(tmp) / ".firefly").chat("请生成一张图片")
+
+        assert response.text == ""
+        assert response.errors == ["图片生成超时（10 分钟）。本次任务已停止，请稍后重试。"]
 
 
 def test_firefly_document_context_reads_docx_and_xlsx() -> None:

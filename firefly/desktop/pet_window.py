@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 from PySide6.QtCore import QPoint, QRect, QSettings, Qt, QTimer, QUrl, Slot
@@ -14,6 +15,7 @@ from PySide6.QtWebEngineWidgets import QWebEngineView
 from firefly.autostart import firefly_desktop_command_parts
 from firefly.desktop.chat_window import local_file_paths_from_mime_data, strip_generated_image_notice
 from firefly.desktop.music import DEFAULT_STARFIRE_SONG, DEFAULT_STARFIRE_SONG_URL, starfire_music_tracks
+from firefly.stickers import extract_sticker_emotion
 from firefly.workspace import load_config, save_config
 
 MENU_STYLE = """
@@ -48,6 +50,31 @@ PET_ACTIVE_TOP = 0.28
 PET_ACTIVE_RIGHT = 0.94
 PET_ACTIVE_BOTTOM = 0.98
 BUBBLE_TAIL = 12
+MAX_WIDGET_SIZE = 16777215
+INTERNAL_REASONING_MARKERS = (
+    "the user says",
+    "the image is a screenshot",
+    "instruction says",
+    "prompt says",
+    "formatting requirements",
+    "let's double-check",
+    "we need to",
+)
+
+
+def clean_live2d_reply(reply: str) -> str:
+    """Remove non-user-facing model output before it reaches the desktop bubble."""
+    text = strip_generated_image_notice(reply)
+    text, _emotion = extract_sticker_emotion(text)
+    text = re.sub(r"<think\b[^>]*>.*?</think>", "", text, flags=re.IGNORECASE | re.DOTALL).strip()
+    final_match = re.search(r"(?:^|\n)\s*(?:final(?: answer)?|最终回答)\s*[:：]\s*(.+)\Z", text, re.IGNORECASE | re.DOTALL)
+    if final_match:
+        text = final_match.group(1).strip()
+    lowered = text.lower().lstrip()
+    marker_count = sum(marker in lowered for marker in INTERNAL_REASONING_MARKERS)
+    if re.match(r"^(?:thought|analysis|reasoning)\b", lowered) or marker_count >= 2:
+        return ""
+    return text
 
 
 class Live2DSpeechBubble(QWidget):
@@ -76,6 +103,10 @@ class Live2DSpeechBubble(QWidget):
         self.label.setFixedWidth(max(40, width - margins.left() - margins.right()))
         self.label.adjustSize()
         self.adjustSize()
+
+    def resetHeightConstraint(self) -> None:
+        self.setMinimumHeight(0)
+        self.setMaximumHeight(MAX_WIDGET_SIZE)
 
     def setTailTarget(self, target_x: int, tail_on_top: bool) -> None:
         self.tail_x = max(24, min(target_x - self.x(), self.width() - 24))
@@ -213,13 +244,12 @@ class PetWindow(QWidget):
         screen = self.screen() or QApplication.primaryScreen()
         available = screen.availableGeometry() if screen is not None else QApplication.primaryScreen().availableGeometry()
         width = min(max(260, self.width()), max(260, available.width() - 24), 420)
+        self.speech_bubble.resetHeightConstraint()
         self.speech_bubble.setText(message)
         self.speech_bubble.setBubbleWidth(width)
         max_height = max(90, min(260, available.height() - 24))
         if self.speech_bubble.height() > max_height:
             self.speech_bubble.setFixedHeight(max_height)
-        else:
-            self.speech_bubble.setMaximumHeight(16777215)
         self.speech_bubble.adjustSize()
         self.position_speech_bubble()
         self._raise_speech_bubble()
@@ -242,7 +272,10 @@ class PetWindow(QWidget):
 
     @Slot(str, str, object)
     def show_agent_reply(self, _message: str, reply: str, _skills: object = None) -> None:
-        reply = strip_generated_image_notice(reply)
+        reply = clean_live2d_reply(reply)
+        if not reply:
+            self.speech_bubble.hide()
+            return
         self.last_agent_reply = reply
         self.show_speech(reply)
         self.set_live2d_mood_from_watch("happy")

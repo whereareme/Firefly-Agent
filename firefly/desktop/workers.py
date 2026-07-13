@@ -50,7 +50,14 @@ class ChatWorker(QObject):
             if response.errors:
                 raise RuntimeError("\n".join(response.errors))
             reply = response.text.strip() or "我没有收到可显示的回复。"
-            self.finished.emit(self.message, reply, response.invoked_skills)
+            self.finished.emit(
+                self.message,
+                reply,
+                {
+                    "invoked_skills": response.invoked_skills,
+                    "relationship_proposal": response.relationship_proposal,
+                },
+            )
         except Exception as error:
             self.failed.emit(str(error))
 

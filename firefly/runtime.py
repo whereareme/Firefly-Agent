@@ -31,13 +31,19 @@ from firefly.context import (
     openharness_skill_dirs,
     permission_mode_value,
 )
+from firefly.companion_imprint import (
+    fetch_companion_imprint_context,
+    strip_companion_imprint_markers,
+)
 from firefly.desktop_tools import firefly_desktop_tools
 from firefly.memory import build_memory_context, remember_turn
 from firefly.prompts import build_firefly_system_prompt
 from firefly.session_storage import FireflySessionBackend, NullSessionBackend
+from firefly.stickers import sticker_path, sticker_prompt, sticker_reply_instruction
 from firefly.workspace import initialize_workspace, load_config
 
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"}
+IMAGE_GENERATION_TIMEOUT_SECONDS = 600.0
 IMAGE_GENERATION_MARKERS = (
     "生图",
     "出图",
@@ -128,6 +134,8 @@ class FireflyResponse:
     invoked_skills: list[str] = field(default_factory=list)
     provider: str = ""
     model: str = ""
+    image_paths: list[str] = field(default_factory=list)
+    relationship_proposal: dict[str, str] | None = None
 
 
 def _history_block(history: list[dict[str, str]] | None) -> str:
@@ -329,6 +337,10 @@ async def run_direct_image_generation(
     workspace: str | Path | None = None,
     attachments: list[str] | None = None,
     history: list[dict[str, str]] | None = None,
+    output_path: str | Path | None = None,
+    send_followup: bool = True,
+    quality: str | None = None,
+    input_fidelity: str | None = None,
 ) -> FireflyResponse:
     cwd_path = Path(cwd or Path.cwd()).resolve()
     workspace_root = initialize_workspace(workspace)
@@ -344,15 +356,17 @@ async def run_direct_image_generation(
         stamp = time.strftime("%Y%m%d_%H%M%S") + f"_{time.time_ns() % 1_000_000:06d}"
 
         async def execute_generation(prompt_text: str, suffix: str = ""):
-            output_path = cwd_path / "generated_images" / f"firefly_{stamp}{suffix}.png"
+            generated_path = Path(output_path) if output_path is not None else cwd_path / "generated_images" / f"firefly_{stamp}{suffix}.png"
+            if suffix:
+                generated_path = generated_path.with_name(f"{generated_path.stem}{suffix}{generated_path.suffix}")
             model = str(config.get("model") or "")
             arguments = ImageGenerationToolInput(
                 prompt=prompt_text,
                 image_paths=image_paths,
-                output_path=str(output_path),
+                output_path=str(generated_path),
                 model=model or None,
-                quality="high" if use_face_reference and model.lower().startswith("gpt-image") else "medium",
-                input_fidelity="high" if use_face_reference and model.lower().startswith("gpt-image") else None,
+                quality=quality or ("high" if use_face_reference and model.lower().startswith("gpt-image") else "medium"),
+                input_fidelity=input_fidelity or ("high" if use_face_reference and model.lower().startswith("gpt-image") else None),
             )
             return await ImageGenerationTool().execute(
                 arguments,
@@ -378,6 +392,10 @@ async def run_direct_image_generation(
     if use_face_reference:
         response.invoked_skills.append("firefly-face-reference")
     paths = [str(path) for path in result.metadata.get("paths", [])] if isinstance(result.metadata, dict) else []
+    response.image_paths = paths
+    if not send_followup:
+        response.text = result.output
+        return response
     if paths:
         followup = await run_firefly_prompt(
             prompt=image_generation_followup_prompt(prompt, history),
@@ -395,6 +413,40 @@ async def run_direct_image_generation(
     else:
         response.text = result.output
     return response
+
+
+def generate_firefly_sticker(
+    emotion: str,
+    *,
+    cwd: str | Path | None = None,
+    workspace: str | Path | None = None,
+) -> str | None:
+    """Return a cached or freshly generated Firefly sticker for one emotion."""
+    workspace_root = initialize_workspace(workspace)
+    path = sticker_path(workspace_root, emotion)
+    if path.is_file():
+        return str(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    response = asyncio.run(
+        run_direct_image_generation(
+            prompt=sticker_prompt(emotion),
+            cwd=cwd,
+            workspace=workspace_root,
+            output_path=path,
+            send_followup=False,
+            quality="medium",
+            input_fidelity="low",
+        )
+    )
+    if not response.image_paths:
+        return None
+    generated = Path(response.image_paths[0])
+    if generated != path and generated.is_file():
+        try:
+            generated.replace(path)
+        except OSError:
+            return str(generated)
+    return str(path) if path.is_file() else str(generated)
 
 
 async def run_firefly_prompt(
@@ -416,10 +468,14 @@ async def run_firefly_prompt(
     workspace_root = initialize_workspace(workspace)
     response = FireflyResponse(text="")
     workspace_config = load_config(workspace_root)
+    companion_context = await asyncio.to_thread(fetch_companion_imprint_context, workspace_config)
     memory_context = build_memory_context(prompt, history, workspace_config, workspace_root, cwd_path) if use_memory_context else ""
     openharness_context = await build_openharness_context(prompt, workspace_config, workspace_root, cwd_path)
     upload_context = build_upload_context(attachments)
-    extra_context = "\n\n".join(part for part in (memory_context, upload_context, openharness_context) if part.strip())
+    sticker_context = sticker_reply_instruction() if bool(workspace_config.get("sticker_interaction_enabled", True)) else ""
+    extra_context = "\n\n".join(
+        part for part in (memory_context, upload_context, openharness_context, sticker_context, companion_context) if part.strip()
+    )
     with openharness_environment(workspace_config):
         try:
             skill_dirs = openharness_skill_dirs(workspace_config, workspace_root)
@@ -506,6 +562,7 @@ async def run_firefly_prompt(
             )
             response.provider = "openharness"
             response.model = str(model or "")
+            response.text, response.relationship_proposal = strip_companion_imprint_markers(response.text)
             invoked = bundle.engine.tool_metadata.get("invoked_skills")
             if isinstance(invoked, list):
                 response.invoked_skills = [str(item) for item in invoked if str(item).strip()]
@@ -609,17 +666,25 @@ class FireflyRuntime:
         edit_approval_prompt=None,
     ) -> FireflyResponse:
         if should_direct_image_generation(prompt):
-            return asyncio.run(
-                run_direct_image_generation(
-                    prompt=prompt,
-                    cwd=self.cwd,
-                    workspace=self.workspace,
-                    attachments=attachments,
-                    history=history,
+            try:
+                return asyncio.run(
+                    asyncio.wait_for(
+                        run_direct_image_generation(
+                            prompt=prompt,
+                            cwd=self.cwd,
+                            workspace=self.workspace,
+                            attachments=attachments,
+                            history=history,
+                        ),
+                        timeout=IMAGE_GENERATION_TIMEOUT_SECONDS,
+                    )
                 )
-            )
+            except TimeoutError:
+                return FireflyResponse(
+                    text="",
+                    errors=["图片生成超时（10 分钟）。本次任务已停止，请稍后重试。"],
+                )
         workspace_root = initialize_workspace(self.workspace)
-        timeout = chat_timeout_seconds(load_config(workspace_root))
         request = {
             "prompt": prompt,
             "cwd": self.cwd,
@@ -634,23 +699,4 @@ class FireflyRuntime:
             "permission_prompt": permission_prompt,
             "edit_approval_prompt": edit_approval_prompt,
         }
-        if has_awareness_context(prompt, attachments, workspace_root):
-            try:
-                return asyncio.run(asyncio.wait_for(run_firefly_prompt(**request), timeout=timeout))
-            except TimeoutError:
-                try:
-                    retry_request = {
-                        **request,
-                        "prompt": strip_awareness_context(prompt),
-                        "attachments": strip_awareness_attachments(attachments, workspace_root),
-                    }
-                    return asyncio.run(
-                        asyncio.wait_for(run_firefly_prompt(**retry_request), timeout=timeout),
-                    )
-                except TimeoutError:
-                    pass
-                return FireflyResponse(text="", errors=[f"请求超时（{int(timeout)} 秒）。请稍后重试；图片整理这类任务可以分批处理。"])
-        try:
-            return asyncio.run(asyncio.wait_for(run_firefly_prompt(**request), timeout=timeout))
-        except TimeoutError:
-            return FireflyResponse(text="", errors=[f"请求超时（{int(timeout)} 秒）。请稍后重试；图片整理这类任务可以分批处理。"])
+        return asyncio.run(run_firefly_prompt(**request))

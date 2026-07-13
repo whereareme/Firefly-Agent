@@ -23,6 +23,34 @@ QWidget#appRoot,
 QWidget#appBody {
     background: #f4faf8;
 }
+QDialog#relationshipImprintDialog {
+    background: #fbfffe;
+    border: 1px solid #b9ddd6;
+    border-radius: 8px;
+}
+QLabel#relationshipDialogTitle {
+    color: #17302b;
+    font-size: 16px;
+    font-weight: 700;
+}
+QLabel#relationshipDialogType {
+    background: #e8f7f4;
+    border: 1px solid #a9d5ce;
+    border-radius: 8px;
+    color: #126f67;
+    font-size: 12px;
+    font-weight: 700;
+    padding: 5px 9px;
+}
+QLabel#relationshipDialogSummary {
+    color: #365c56;
+    font-size: 13px;
+    line-height: 1.5;
+}
+QLabel#relationshipDialogError {
+    color: #b3473e;
+    font-size: 12px;
+}
 QWidget#titleChrome {
     background: #fbfffe;
     border-bottom: 1px solid #cde3df;
@@ -1061,6 +1089,24 @@ QLabel#chatStatusMessage {
 }
 QTextBrowser#filePreview {
     background: #10221f;
+}
+QDialog#relationshipImprintDialog {
+    background: #10201d;
+    border: 1px solid #345c55;
+}
+QLabel#relationshipDialogTitle {
+    color: #e2f3ef;
+}
+QLabel#relationshipDialogType {
+    background: #18342f;
+    border: 1px solid #4f978b;
+    color: #8fe5da;
+}
+QLabel#relationshipDialogSummary {
+    color: #cce8e2;
+}
+QLabel#relationshipDialogError {
+    color: #f0aaa2;
 }
 QTextEdit#messageInput:focus {
     background: #18342f;

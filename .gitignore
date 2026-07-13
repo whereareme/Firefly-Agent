@@ -45,6 +45,10 @@ logs/
 gcm-diagnose.log
 autopilot-dashboard/public/snapshot.json
 docs/autopilot/snapshot.json
+firefly-relationship-gateway/config.json
+firefly-relationship-gateway/data/
+firefly-relationship-gateway/**/__pycache__/
+remove_white_bg.py
 
 # OS
 .DS_Store

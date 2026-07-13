@@ -89,6 +89,7 @@ DEFAULT_CONFIG: dict[str, object] = {
     "firefly_watch_enabled": False,
     "firefly_watch_interval_sec": 300,
     "chat_window_context_enabled": False,
+    "sticker_interaction_enabled": True,
     "chat_timeout_sec": 300,
     "theme_mode": "system",
     "starfire_music_dir": "",
@@ -115,6 +116,14 @@ DEFAULT_CONFIG: dict[str, object] = {
     "openharness_memory_max_results": 5,
     "openharness_session_id": "firefly",
     "openharness_session_memory_path": "",
+    "companion_imprint_enabled": False,
+    "companion_imprint_port": 8787,
+    "companion_imprint_project_path": "",
+    "companion_imprint_config_path": "",
+    "companion_imprint_original_base_url": "",
+    "companion_imprint_profile": "",
+    "companion_imprint_takeover": False,
+    "companion_imprint_takeover_endpoint": "",
 }
 
 

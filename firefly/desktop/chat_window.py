@@ -6,6 +6,7 @@ import html
 import re
 import tempfile
 import threading
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -16,6 +17,7 @@ from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
     QComboBox,
+    QDialog,
     QFileDialog,
     QFrame,
     QHBoxLayout,
@@ -38,13 +40,16 @@ from PySide6.QtWidgets import (
 )
 
 from firefly.desktop.chat_rendering import ChatBubble, format_chat_text, normalize_chat_text, render_chat_html
+from firefly.desktop.companion_imprint import CompanionImprintController
 from firefly.desktop.styles import chat_style_for_mode, chat_viewport_style_for_mode, combo_popup_style, resolved_theme_mode
 from firefly.desktop.settings_panel import SettingsPanelMixin
 from firefly.desktop.upload_widgets import upload_preview_widget
-from firefly.desktop.workers import ChatWorker, live2d_mood_for_reply
+from firefly.desktop.workers import ChatWorker, TaskWorker, live2d_mood_for_reply
 from firefly.desktop_awareness import FIREFLY_WINDOW_TITLE_PARTS, capture_desktop_snapshot, snapshot_prompt
-from firefly.runtime import FireflyRuntime
+from firefly.companion_imprint import record_companion_imprint_event
+from firefly.runtime import FireflyRuntime, generate_firefly_sticker
 from firefly.session_storage import load_desktop_conversations, save_desktop_conversations
+from firefly.stickers import extract_sticker_emotion
 from firefly.workspace import load_config, save_config
 
 UI_ASSET_ROOT = Path(__file__).resolve().parents[1] / "assets" / "ui"
@@ -54,6 +59,12 @@ IMAGE_PATH_RE = re.compile(
     r"(?:\.{1,2}[\\/])?[^\s`'\"<>|，。！？；：、]+[\\/][^\s`'\"<>|，。！？；：、]+?\.(?:png|jpe?g|gif|webp|bmp))"
 )
 PERMISSION_MODES = {"default", "plan", "full_auto"}
+STICKER_COOLDOWN_SECONDS = 120.0
+RELATIONSHIP_EVENT_LABELS = {
+    "memory": "重要时刻",
+    "gift": "礼物",
+    "anniversary": "纪念日",
+}
 
 
 def chat_bubble_max_width(window_width: int) -> int:
@@ -281,14 +292,79 @@ class ModelSelector(QComboBox):
         super().showPopup()
 
 
+class RelationshipImprintDialog(QDialog):
+    """Non-modal confirmation surface for one relationship event."""
+
+    def __init__(self, proposal: dict[str, str], parent: QWidget) -> None:
+        super().__init__(parent)
+        self.proposal = dict(proposal)
+        self.setObjectName("relationshipImprintDialog")
+        self.setWindowTitle("同行印记")
+        self.setModal(False)
+        self.setAttribute(Qt.WA_DeleteOnClose)
+        self.setMinimumWidth(420)
+        self.setMaximumWidth(520)
+        self._saving = False
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(22, 20, 22, 18)
+        layout.setSpacing(12)
+        title = QLabel("要把这一刻记下来吗？", self)
+        title.setObjectName("relationshipDialogTitle")
+        event_type = QLabel(RELATIONSHIP_EVENT_LABELS.get(proposal.get("kind", ""), "同行印记"), self)
+        event_type.setObjectName("relationshipDialogType")
+        summary = QLabel(proposal.get("summary", ""), self)
+        summary.setObjectName("relationshipDialogSummary")
+        summary.setWordWrap(True)
+        self.error_label = QLabel("", self)
+        self.error_label.setObjectName("relationshipDialogError")
+        self.error_label.setWordWrap(True)
+        self.error_label.hide()
+        layout.addWidget(title)
+        layout.addWidget(event_type, 0, Qt.AlignLeft)
+        layout.addWidget(summary)
+        layout.addWidget(self.error_label)
+
+        actions = QHBoxLayout()
+        actions.setContentsMargins(0, 4, 0, 0)
+        actions.addStretch(1)
+        self.dismiss_button = QPushButton("暂不", self)
+        self.dismiss_button.setObjectName("secondaryButton")
+        self.confirm_button = QPushButton("记下", self)
+        actions.addWidget(self.dismiss_button)
+        actions.addWidget(self.confirm_button)
+        layout.addLayout(actions)
+
+    def set_saving(self, saving: bool) -> None:
+        self._saving = saving
+        self.confirm_button.setEnabled(not saving)
+        self.dismiss_button.setEnabled(not saving)
+        self.confirm_button.setText("正在记录..." if saving else "记下")
+        if saving:
+            self.error_label.hide()
+
+    def show_error(self, message: str) -> None:
+        self.set_saving(False)
+        self.error_label.setText(message)
+        self.error_label.show()
+
+    def closeEvent(self, event: QCloseEvent) -> None:
+        if self._saving:
+            event.ignore()
+            return
+        super().closeEvent(event)
+
+
 class ChatWindow(SettingsPanelMixin, QMainWindow):
     approval_requested = Signal(object)
+    relationship_record_finished = Signal(object, object, str)
 
     def __init__(self, runtime: FireflyRuntime, workspace: Path, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.runtime = runtime
         self.workspace = workspace
         self.config = load_config(workspace)
+        self.companion_imprint_controller = CompanionImprintController(self, self)
         self.history: list[dict[str, str]] = []
         self.messages: list[dict[str, str]] = []
         self.thread: QThread | None = None
@@ -301,6 +377,14 @@ class ChatWindow(SettingsPanelMixin, QMainWindow):
         self._context_snapshotter: Any = None
         self.pending_uploads: list[Path] = []
         self._status_token = 0
+        self._sticker_active = False
+        self._next_sticker_check = 0.0
+        self._sticker_thread: QThread | None = None
+        self._sticker_worker: TaskWorker | None = None
+        self._sticker_conversation: dict[str, Any] | None = None
+        self._relationship_queue: list[dict[str, str]] = []
+        self._relationship_dialog: RelationshipImprintDialog | None = None
+        self._relationship_record_thread: threading.Thread | None = None
         self.nav_collapsed = True
         self.nav_expanded_width = 260
         self.resize_grip: QSizeGrip | None = None
@@ -315,7 +399,10 @@ class ChatWindow(SettingsPanelMixin, QMainWindow):
         self.apply_runtime_config()
         self.setCentralWidget(self.build_ui())
         self.approval_requested.connect(self.handle_approval_request, Qt.QueuedConnection)
+        self.relationship_record_finished.connect(self.handle_relationship_record_result, Qt.QueuedConnection)
         self.load_conversation(self.current_conversation_index)
+        if self.companion_imprint_controller.enabled:
+            QTimer.singleShot(0, self.start_companion_imprint_if_enabled)
 
     def apply_theme(self) -> None:
         self.setProperty("darkTheme", resolved_theme_mode(self.config.get("theme_mode")) == "dark")
@@ -325,6 +412,10 @@ class ChatWindow(SettingsPanelMixin, QMainWindow):
         if hasattr(self, "chat_messages_widget"):
             for bubble in self.chat_messages_widget.findChildren(ChatBubble):
                 bubble.update()
+
+    def start_companion_imprint_if_enabled(self) -> None:
+        if self.companion_imprint_controller.enabled:
+            self.companion_imprint_controller.start()
 
     def set_live2d_mood_sender(self, sender) -> None:
         self._mood_sender = sender
@@ -1359,13 +1450,13 @@ class ChatWindow(SettingsPanelMixin, QMainWindow):
 
     @Slot(str, str, object)
     def handle_reply(self, message: str, reply: str, invoked_skills: object = None) -> None:
-        del invoked_skills
+        proposal = invoked_skills.get("relationship_proposal") if isinstance(invoked_skills, dict) else None
         _conversation_key, conversation = self.worker_conversation_context()
         conversation_index = self.conversation_index_for_object(conversation)
         if conversation_index is None:
             return
         image_paths = reply_image_paths(reply, Path(self.runtime.cwd or self.workspace))
-        clean_reply = strip_generated_image_notice(reply)
+        clean_reply, sticker_emotion = extract_sticker_emotion(strip_generated_image_notice(reply))
         assistant_content = clean_reply
         if image_paths:
             notices = "\n".join(f"生成的图片已保存到 `{path}`。" for path in image_paths)
@@ -1384,6 +1475,140 @@ class ChatWindow(SettingsPanelMixin, QMainWindow):
         self.set_mood(live2d_mood_for_reply(clean_reply))
         self.sync_composer_state()
         self.persist_conversations()
+        self.maybe_start_sticker_task(conversation, sticker_emotion)
+        if isinstance(proposal, dict):
+            self.enqueue_relationship_proposal(proposal)
+
+    def enqueue_relationship_proposal(self, proposal: dict[str, object]) -> None:
+        kind = proposal.get("kind")
+        summary = proposal.get("summary")
+        if kind not in RELATIONSHIP_EVENT_LABELS or not isinstance(summary, str) or not summary.strip():
+            return
+        candidate = {"kind": str(kind), "summary": summary.strip()}
+        if candidate in self._relationship_queue:
+            return
+        if self._relationship_dialog is not None and self._relationship_dialog.proposal == candidate:
+            return
+        self._relationship_queue.append(candidate)
+        QTimer.singleShot(0, self.show_next_relationship_proposal)
+
+    def show_next_relationship_proposal(self) -> None:
+        if self._relationship_dialog is not None or not self._relationship_queue:
+            return
+        if not self.isVisible():
+            self.show_and_raise()
+        proposal = self._relationship_queue.pop(0)
+        dialog = RelationshipImprintDialog(proposal, self)
+        dialog.setStyleSheet(chat_style_for_mode(self.config.get("theme_mode")))
+        dialog.dismiss_button.clicked.connect(lambda: self.finish_relationship_dialog(dialog))
+        dialog.confirm_button.clicked.connect(lambda: self.record_relationship_proposal(dialog))
+        dialog.finished.connect(lambda _result: self.relationship_dialog_closed(dialog))
+        self._relationship_dialog = dialog
+        dialog.show()
+        dialog.raise_()
+        dialog.activateWindow()
+
+    def record_relationship_proposal(self, dialog: RelationshipImprintDialog) -> None:
+        if dialog is not self._relationship_dialog or self._relationship_record_thread is not None:
+            return
+        dialog.set_saving(True)
+        config = dict(self.config)
+        proposal = dict(dialog.proposal)
+
+        def record() -> None:
+            try:
+                result = record_companion_imprint_event(config, proposal)
+            except Exception as error:
+                self.relationship_record_finished.emit(dialog, None, str(error))
+                return
+            self.relationship_record_finished.emit(dialog, result, "")
+
+        thread = threading.Thread(target=record, name="firefly-relationship-record", daemon=True)
+        self._relationship_record_thread = thread
+        thread.start()
+
+    @Slot(object, object, str)
+    def handle_relationship_record_result(
+        self, dialog: RelationshipImprintDialog, result: object, error: str
+    ) -> None:
+        self._relationship_record_thread = None
+        if dialog is not self._relationship_dialog:
+            return
+        if error:
+            dialog.show_error(error)
+            return
+        if not isinstance(result, dict) or result.get("recorded") is not True:
+            dialog.show_error("同行印记没有确认保存结果")
+            return
+        self.set_status_text("已记入同行印记")
+        self.finish_relationship_dialog(dialog)
+
+    def finish_relationship_dialog(self, dialog: RelationshipImprintDialog) -> None:
+        if dialog is not self._relationship_dialog:
+            return
+        self._relationship_dialog = None
+        dialog.set_saving(False)
+        dialog.close()
+        QTimer.singleShot(0, self.show_next_relationship_proposal)
+
+    def relationship_dialog_closed(self, dialog: RelationshipImprintDialog) -> None:
+        if dialog is self._relationship_dialog and self._relationship_record_thread is None:
+            self._relationship_dialog = None
+            QTimer.singleShot(0, self.show_next_relationship_proposal)
+
+    def maybe_start_sticker_task(self, conversation: dict[str, Any], emotion: str | None) -> None:
+        if (
+            not bool(self.config.get("sticker_interaction_enabled", True))
+            or emotion is None
+            or self._sticker_active
+            or time.monotonic() < self._next_sticker_check
+        ):
+            return
+        self._sticker_active = True
+        self._next_sticker_check = time.monotonic() + STICKER_COOLDOWN_SECONDS
+        thread = QThread(self)
+        worker = TaskWorker(lambda: generate_firefly_sticker(emotion, cwd=self.runtime.cwd, workspace=self.workspace))
+        self._sticker_thread = thread
+        self._sticker_worker = worker
+        self._sticker_conversation = conversation
+        worker.moveToThread(thread)
+        thread.started.connect(worker.run)
+        worker.finished.connect(self.handle_sticker_result, Qt.QueuedConnection)
+        worker.failed.connect(self.handle_sticker_failure, Qt.QueuedConnection)
+        worker.finished.connect(thread.quit)
+        worker.failed.connect(thread.quit)
+        worker.finished.connect(worker.deleteLater)
+        thread.finished.connect(thread.deleteLater)
+        thread.finished.connect(self.finish_sticker_task)
+        thread.start()
+
+    @Slot(object)
+    def handle_sticker_result(self, result: object) -> None:
+        conversation = self._sticker_conversation
+        if (
+            conversation is None
+            or not bool(self.config.get("sticker_interaction_enabled", True))
+            or not isinstance(result, str)
+            or not Path(result).is_file()
+            or self.conversation_index_for_object(conversation) is None
+        ):
+            return
+        if self.conversation_index_for_object(conversation) == self.current_conversation_index:
+            self.append_file_message(result, is_user=False)
+        else:
+            messages = list(conversation.get("messages", []))
+            messages.append({"role": "assistant_file", "content": result, "timestamp": message_timestamp()})
+            conversation["messages"] = messages
+        self.persist_conversations()
+
+    @Slot(str)
+    def handle_sticker_failure(self, _error: str) -> None:
+        self.finish_sticker_task()
+
+    def finish_sticker_task(self) -> None:
+        self._sticker_active = False
+        self._sticker_thread = None
+        self._sticker_worker = None
 
     @Slot(str)
     def handle_error(self, error: str) -> None:

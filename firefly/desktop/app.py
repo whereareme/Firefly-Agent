@@ -157,8 +157,8 @@ def main(
         return 1
 
     try:
-        from firefly.desktop.chat_window import ChatWindow, strip_generated_image_notice
-        from firefly.desktop.pet_window import PetWindow
+        from firefly.desktop.chat_window import ChatWindow
+        from firefly.desktop.pet_window import PetWindow, clean_live2d_reply
         from firefly.desktop.workers import ChatWorker
         from firefly.desktop_awareness import (
             FIREFLY_WINDOW_TITLE_PARTS,
@@ -187,6 +187,7 @@ def main(
 
     runtime = FireflyRuntime(cwd=cwd, workspace=workspace_root, model=model, provider_profile=provider_profile)
     chat_window = ChatWindow(runtime, workspace_root)
+    app.aboutToQuit.connect(chat_window.companion_imprint_controller.shutdown)
 
     def open_chat_with_files(files: list[str] | None = None) -> None:
         chat_window.show_and_raise()
@@ -267,7 +268,11 @@ def main(
         if not complete_watch_turn(watch_state):
             write_firefly_watch_log(workspace_root, "late_reply", reply_chars=len(reply.strip()))
             return
-        cleaned = strip_generated_image_notice(reply)
+        cleaned = clean_live2d_reply(reply)
+        if not cleaned:
+            write_firefly_watch_log(workspace_root, "filtered_reply", reply_chars=len(reply.strip()))
+            pet_window.speech_bubble.hide()
+            return
         write_firefly_watch_log(workspace_root, "reply", reply_chars=len(cleaned.strip()))
         pet_window.last_agent_reply = cleaned
         pet_window.show_speech(cleaned, 15_000)

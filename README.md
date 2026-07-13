@@ -17,6 +17,8 @@ This is an unofficial fan-made project, not an official HoYoverse application or
 - Optional web search for current external information
 - Skills, model profiles, and permission settings
 - Optional Windows desktop awareness and simple computer controls
+- Six default low-frequency Firefly sticker emotions: happy, shy, surprised, worried, sleepy, and speechless
+- Optional local Companion Imprint Sidecar for relationship context and user-confirmed events
 - Local workspace and session storage
 
 The project is built on [OpenHarness](https://github.com/HKUDS/OpenHarness), which provides the underlying Agent loop, tools, skills, memory, providers, permissions, and multi-agent infrastructure.
@@ -38,6 +40,8 @@ On Windows, you can also run:
 ```
 
 `firefly check` validates the workspace, persona data, Live2D assets, Qt dependencies, document support, resource attribution, and lockfile before launch.
+
+The Companion Imprint Sidecar is included under `firefly-relationship-gateway/`. It listens on loopback, forwards the existing model authorization without saving it, and stores only confirmed relationship events locally. Its `config.json` and `data/` directory are intentionally excluded from Git.
 
 ## Configuration and Privacy
 
