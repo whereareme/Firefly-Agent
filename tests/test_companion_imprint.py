@@ -63,6 +63,9 @@ class _FakeProcess:
     def waitForFinished(self, _milliseconds: int) -> bool:
         return True
 
+    def processId(self) -> int:
+        return 4321
+
 
 class _FakeAuthManager:
     updates: list[tuple[str, str]] = []
@@ -99,6 +102,9 @@ class _Host:
     def current_profile_base_url(self) -> str:
         return self.base_url
 
+    def current_profile_model(self) -> str:
+        return "firefly-test"
+
     def selected_profile_name(self) -> str:
         return self.profile
 
@@ -111,13 +117,14 @@ def controller(tmp_path, monkeypatch):
     QApplication.instance() or QApplication([])
     _FakeAuthManager.updates = []
     monkeypatch.setattr(imprint, "QProcess", _FakeProcess)
+    monkeypatch.setattr(imprint, "_terminate_process_tree", lambda process: process.terminate())
     monkeypatch.setattr(imprint, "AuthManager", _FakeAuthManager)
     monkeypatch.setattr(imprint, "save_config", lambda _config, _workspace: None)
     monkeypatch.setattr(imprint, "profile_api_key", lambda _name, _profile: "transient-key")
     monkeypatch.setattr(
         imprint,
         "fetch_openai_compatible_models",
-        lambda _url, api_key="", timeout=1: ["firefly-test"],
+        lambda _url, api_key="", timeout=1, selected_model="": ["firefly-test"],
     )
     host = _Host(tmp_path)
     return imprint.CompanionImprintController(host), host
@@ -138,6 +145,24 @@ def wait_until(predicate) -> None:
 def connect(gateway) -> None:
     gateway.process.started.emit()
     wait_until(lambda: gateway.status == "connected")
+
+
+def test_windows_process_tree_stop_targets_only_the_managed_sidecar(monkeypatch):
+    process = _FakeProcess(None)
+    process._state = 1
+    calls = []
+    monkeypatch.setattr(imprint.sys, "platform", "win32")
+    monkeypatch.setattr(
+        imprint.subprocess,
+        "run",
+        lambda arguments, **kwargs: calls.append((arguments, kwargs)) or SimpleNamespace(returncode=0),
+    )
+
+    imprint._terminate_process_tree(process)
+
+    assert calls[0][0] == ["taskkill", "/PID", "4321", "/T", "/F"]
+    assert calls[0][1]["check"] is False
+    assert process.terminated is False
 
 
 def test_enable_writes_exact_config_without_switching_profile_after_probe(controller):
@@ -172,6 +197,17 @@ def test_enable_writes_exact_config_without_switching_profile_after_probe(contro
     assert host.runtime_updates == 0
 
 
+def test_open_panel_uses_the_running_sidecar(controller, monkeypatch):
+    gateway, _host = controller
+    shown: list[int] = []
+    monkeypatch.setattr(imprint, "_show_sidecar_panel", lambda port: shown.append(port) or True)
+    gateway._set_status("connected")
+
+    assert gateway.open_panel() is True
+    assert shown == [gateway.port]
+    assert gateway.error == ""
+
+
 def test_stop_restores_the_original_profile_address(controller):
     gateway, host = controller
     gateway.enable()
@@ -194,7 +230,7 @@ def test_failed_probe_restores_direct_traffic_and_reports_an_error(controller, m
     monkeypatch.setattr(
         imprint,
         "fetch_openai_compatible_models",
-        lambda _url, api_key="", timeout=1: (_ for _ in ()).throw(RuntimeError("offline")),
+        lambda _url, api_key="", timeout=1, selected_model="": (_ for _ in ()).throw(RuntimeError("offline")),
     )
 
     gateway.enable()
@@ -260,13 +296,15 @@ def test_readiness_probe_forwards_the_profile_key_without_persisting_it(controll
     monkeypatch.setattr(
         imprint,
         "fetch_openai_compatible_models",
-        lambda url, api_key="", timeout=1: requests.append((url, api_key, timeout)),
+        lambda url, api_key="", timeout=1, selected_model="": requests.append(
+            (url, api_key, timeout, selected_model)
+        ),
     )
 
     gateway.enable()
     connect(gateway)
 
-    assert requests == [(gateway.endpoint, "transient-key", 1)]
+    assert requests == [(gateway.endpoint, "transient-key", 1, "firefly-test")]
     assert "transient-key" not in gateway.config_path.read_text(encoding="utf-8")
 
 
@@ -315,6 +353,18 @@ def test_direct_start_saves_upstream_before_takeover(controller):
     assert host.config["companion_imprint_takeover"] is False
 
 
+def test_start_reuses_an_existing_sidecar_without_spawning_another(controller, monkeypatch):
+    gateway, host = controller
+    host.config["companion_imprint_enabled"] = True
+    monkeypatch.setattr(imprint, "_sidecar_already_running", lambda port: port == 18787)
+
+    assert gateway.start() is True
+
+    assert gateway.status == "connected"
+    assert gateway.process.program == ""
+    assert host.config["companion_imprint_original_base_url"] == "https://upstream.example/v1"
+
+
 def test_restore_repairs_local_profile_even_when_takeover_flag_is_stale(controller):
     gateway, host = controller
     host.base_url = gateway.endpoint
@@ -336,9 +386,10 @@ def test_shutdown_waits_for_an_in_flight_probe(controller, monkeypatch):
     probe_started = threading.Event()
     allow_probe_to_finish = threading.Event()
 
-    def delayed_probe(_url, api_key="", timeout=1):
+    def delayed_probe(_url, api_key="", timeout=1, selected_model=""):
         assert api_key == "transient-key"
         assert timeout == 1
+        assert selected_model == "firefly-test"
         probe_started.set()
         assert allow_probe_to_finish.wait(timeout=1)
         return ["firefly-test"]

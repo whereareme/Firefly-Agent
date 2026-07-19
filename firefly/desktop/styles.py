@@ -24,32 +24,58 @@ QWidget#appBody {
     background: #f4faf8;
 }
 QDialog#relationshipImprintDialog {
+    background: transparent;
+}
+QFrame#relationshipImprintCard {
     background: #fbfffe;
     border: 1px solid #b9ddd6;
-    border-radius: 8px;
+    border-radius: 7px;
+}
+QLabel#relationshipDialogAvatar {
+    background: #e8f7f4;
+    border: 1px solid #9ecfc6;
+    border-radius: 15px;
+}
+QLabel#relationshipDialogCaption {
+    color: #438174;
+    font-size: 10px;
+    font-weight: 700;
 }
 QLabel#relationshipDialogTitle {
     color: #17302b;
-    font-size: 16px;
+    font-size: 13px;
     font-weight: 700;
+}
+QLabel#relationshipDialogQueue {
+    color: #879a95;
+    font-size: 10px;
 }
 QLabel#relationshipDialogType {
     background: #e8f7f4;
     border: 1px solid #a9d5ce;
-    border-radius: 8px;
+    border-radius: 7px;
     color: #126f67;
-    font-size: 12px;
+    font-size: 10px;
     font-weight: 700;
-    padding: 5px 9px;
+    padding: 3px 7px;
 }
 QLabel#relationshipDialogSummary {
     color: #365c56;
-    font-size: 13px;
+    font-size: 11px;
     line-height: 1.5;
 }
 QLabel#relationshipDialogError {
     color: #b3473e;
-    font-size: 12px;
+    font-size: 10px;
+}
+QDialog#relationshipImprintDialog QPushButton {
+    min-height: 28px;
+    padding: 0 11px;
+    font-size: 11px;
+}
+QPushButton#relationshipConfirmButton {
+    background: #2f8e7d;
+    border: 1px solid #2f8e7d;
 }
 QWidget#titleChrome {
     background: #fbfffe;
@@ -613,11 +639,11 @@ QLabel#chatBubbleTextUser {
     font-weight: 400;
     padding: 0;
 }
-QLabel#chatBubbleTime {
+QLabel#chatMessageTime {
     background: transparent;
     border: 0;
-    color: #6f8984;
-    font-size: 10px;
+    color: #81938f;
+    font-size: 11px;
     padding: 0;
 }
 QLabel#chatStatusMessage {
@@ -870,7 +896,7 @@ QLabel#conversationItemTitle {
     color: #c4e1da;
 }
 QLabel#conversationItemTime,
-QLabel#chatBubbleTime {
+QLabel#chatMessageTime {
     color: #9bbdb5;
 }
 QPushButton#railToggle:hover,
@@ -1091,11 +1117,24 @@ QTextBrowser#filePreview {
     background: #10221f;
 }
 QDialog#relationshipImprintDialog {
+    background: transparent;
+}
+QFrame#relationshipImprintCard {
     background: #10201d;
     border: 1px solid #345c55;
 }
+QLabel#relationshipDialogAvatar {
+    background: #18342f;
+    border: 1px solid #4f978b;
+}
+QLabel#relationshipDialogCaption {
+    color: #8fcfc5;
+}
 QLabel#relationshipDialogTitle {
     color: #e2f3ef;
+}
+QLabel#relationshipDialogQueue {
+    color: #8fa9a3;
 }
 QLabel#relationshipDialogType {
     background: #18342f;
@@ -1107,6 +1146,11 @@ QLabel#relationshipDialogSummary {
 }
 QLabel#relationshipDialogError {
     color: #f0aaa2;
+}
+QPushButton#relationshipConfirmButton {
+    background: #31968d;
+    border: 1px solid #45b2a5;
+    color: #ffffff;
 }
 QTextEdit#messageInput:focus {
     background: #18342f;

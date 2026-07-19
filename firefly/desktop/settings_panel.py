@@ -129,12 +129,16 @@ class SettingsComboBox(QComboBox):
         super().showPopup()
 
 
-def fetch_openai_compatible_models(base_url: str, api_key: str = "", timeout: float = 8) -> list[str]:
+def fetch_openai_compatible_models(
+    base_url: str, api_key: str = "", timeout: float = 8, selected_model: str = ""
+) -> list[str]:
     if not base_url:
         raise ValueError("接口地址为空")
     headers = {"Accept": "application/json"}
     if api_key:
         headers["Authorization"] = f"Bearer {api_key}"
+    if selected_model:
+        headers["X-Firefly-Model"] = selected_model
     request = urllib.request.Request(f"{base_url.rstrip('/')}/models", headers=headers)
     try:
         with urllib.request.urlopen(request, timeout=timeout) as response:
@@ -621,7 +625,7 @@ class SettingsPanelMixin:
 
         action_row = QHBoxLayout()
         action_row.setContentsMargins(0, 0, 0, 0)
-        self.companion_imprint_enable_button = QPushButton("启用", panel)
+        self.companion_imprint_enable_button = QPushButton("打开面板", panel)
         self.companion_imprint_start_button = QPushButton("启动", panel)
         self.companion_imprint_stop_button = QPushButton("停止", panel)
         self.companion_imprint_restart_button = QPushButton("重启", panel)
@@ -633,7 +637,7 @@ class SettingsPanelMixin:
             self.companion_imprint_restart_button,
         ):
             button.setObjectName("secondaryButton")
-        self.companion_imprint_enable_button.clicked.connect(self.enable_companion_imprint)
+        self.companion_imprint_enable_button.clicked.connect(self.open_companion_imprint_panel)
         self.companion_imprint_start_button.clicked.connect(self.start_companion_imprint)
         self.companion_imprint_stop_button.clicked.connect(self.stop_companion_imprint)
         self.companion_imprint_restart_button.clicked.connect(self.restart_companion_imprint)
@@ -675,10 +679,8 @@ class SettingsPanelMixin:
         self.companion_imprint_settings()
         self.refresh_companion_imprint_panel()
 
-    def enable_companion_imprint(self) -> None:
-        self.companion_imprint_enabled_check.setChecked(True)
-        if self.companion_imprint_settings(enabled=True):
-            self.companion_imprint_controller.enable()
+    def open_companion_imprint_panel(self) -> None:
+        self.companion_imprint_controller.open_panel()
         self.refresh_companion_imprint_panel()
 
     def start_companion_imprint(self) -> None:
@@ -710,7 +712,7 @@ class SettingsPanelMixin:
         self.companion_imprint_status_label.setText(f"运行状态: {labels.get(controller.status, controller.status)}")
         self.companion_imprint_endpoint_label.setText(f"印记服务: http://127.0.0.1:{controller.port}")
         self.companion_imprint_error_label.setText(f"最近错误: {controller.error or '无'}")
-        self.companion_imprint_enable_button.setEnabled(not running)
+        self.companion_imprint_enable_button.setEnabled(controller.status == "connected")
         self.companion_imprint_start_button.setEnabled(enabled and not running)
         self.companion_imprint_stop_button.setEnabled(running)
         self.companion_imprint_restart_button.setEnabled(enabled)

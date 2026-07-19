@@ -4,6 +4,9 @@ from __future__ import annotations
 
 import json
 import re
+import threading
+from datetime import date
+from queue import Queue
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
@@ -14,6 +17,12 @@ CONTROL_MARKER_PATTERN = re.compile(r"<!--FIREFLY_RELATIONSHIP:(.*?)-->", re.DOT
 EVENT_KINDS = frozenset(("memory", "gift", "anniversary"))
 MAX_SUMMARY_LENGTH = 500
 SIDECAR_TIMEOUT_SECONDS = 0.5
+MAX_MEMORY_CONTEXT_LINE = 1_000
+MAX_MEMORY_CONTEXT_CHARS = 8_000
+_memory_context_queue: Queue[tuple[dict[str, object], str, int, str]] = Queue()
+_memory_context_lock = threading.Lock()
+_memory_context_revision = 0
+_memory_context_worker_started = False
 
 
 def companion_imprint_endpoint(config: dict[str, object]) -> str:
@@ -80,6 +89,54 @@ def submit_companion_imprint_proposal(config: dict[str, object], proposal: dict[
             return response.status == 202
     except (HTTPError, URLError, OSError, TimeoutError):
         return False
+
+
+def submit_companion_imprint_memory_context(
+    config: dict[str, object], context: str, revision: int, activity_date: str
+) -> bool:
+    """Send one bounded memory retrieval snapshot to the Sidecar."""
+    if not bool(config.get("companion_imprint_enabled", False)):
+        return False
+    lines = [" ".join(line.split())[:MAX_MEMORY_CONTEXT_LINE] for line in str(context).splitlines()]
+    context = "\n".join(line for line in lines if line)[:MAX_MEMORY_CONTEXT_CHARS]
+    body = json.dumps(
+        {"context": context, "revision": revision, "activity_date": activity_date},
+        ensure_ascii=False,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    request = Request(
+        f"{companion_imprint_endpoint(config)}/relationship/memory-context",
+        data=body,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urlopen(request, timeout=SIDECAR_TIMEOUT_SECONDS) as response:
+            return response.status == 202
+    except (HTTPError, URLError, OSError, TimeoutError):
+        return False
+
+
+def enqueue_companion_imprint_memory_context(config: dict[str, object], context: str) -> None:
+    """Submit snapshots in revision order without putting prompts in the payload."""
+    global _memory_context_revision, _memory_context_worker_started
+    with _memory_context_lock:
+        _memory_context_revision += 1
+        revision = _memory_context_revision
+        if not _memory_context_worker_started:
+            threading.Thread(
+                target=_memory_context_worker,
+                name="companion-imprint-memory-context",
+                daemon=True,
+            ).start()
+            _memory_context_worker_started = True
+    _memory_context_queue.put((dict(config), context, revision, date.today().isoformat()))
+
+
+def _memory_context_worker() -> None:
+    while True:
+        submit_companion_imprint_memory_context(*_memory_context_queue.get())
+        _memory_context_queue.task_done()
 
 
 def record_companion_imprint_event(config: dict[str, object], proposal: dict[str, str]) -> dict[str, object]:

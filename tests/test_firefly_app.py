@@ -36,7 +36,7 @@ from firefly.context import (
 from firefly import desktop_tools as desktop_tools_module
 from firefly.desktop_tools import DesktopScreenshotInput, DesktopScreenshotTool, DesktopWindowInput, DesktopWindowTool
 from firefly.desktop.chat_rendering import ChatBubble, chat_bubble_colors, format_chat_text, render_chat_html, render_chat_inline
-from firefly.desktop.chat_window import ModelSelector, chat_bubble_max_width, conversation_activity_time, conversation_title, format_message_time, local_file_paths_from_mime_data, local_permission_mode_command, remove_temporary_context_snapshot, reply_image_paths, strip_generated_image_notice
+from firefly.desktop.chat_window import ModelSelector, chat_bubble_max_width, conversation_activity_time, conversation_title, format_message_time, local_file_paths_from_mime_data, local_permission_mode_command, remove_temporary_context_snapshot, reply_image_paths, should_show_message_time, strip_generated_image_notice
 from firefly.desktop.music import DEFAULT_STARFIRE_SONG, DEFAULT_STARFIRE_SONG_URL, starfire_music_tracks
 from firefly.desktop.settings_panel import SettingsComboBox, SettingsPanelMixin, SlidingToggle, fetch_openai_compatible_models
 from firefly.desktop.styles import chat_style_for_mode, chat_viewport_style_for_mode, normalized_theme_mode
@@ -44,7 +44,7 @@ from firefly.desktop.workers import ChatWorker, TaskWorker
 from firefly.desktop_awareness import DesktopSnapshot, select_snapshot_window, snapshot_prompt
 from firefly.library_index import refresh_library_index, search_library_index
 from firefly.live2d.module import Live2DModule
-from firefly.memory import build_memory_context, extract_memory_lines, is_identity_setting, remember_session_memory, remember_turn, should_store_memory
+from firefly.memory import build_everos_memory_context, build_memory_context, extract_memory_lines, is_identity_setting, remember_session_memory, remember_turn, should_store_memory
 from firefly.persona import CharacterModule
 from firefly.prompts import DEFAULT_PERSONA_PATH
 import firefly.runtime as firefly_runtime
@@ -81,6 +81,14 @@ def test_firefly_persona_loads() -> None:
 def test_firefly_chat_timestamps_format_for_bubbles_and_conversations() -> None:
     assert format_message_time("2026-07-11T10:24:00+08:00") == "10:24"
     assert conversation_activity_time({"messages": [{"timestamp": "not-a-time"}]}) == ""
+    assert should_show_message_time("", "2026-07-11T10:24:00+08:00") is True
+    assert should_show_message_time("2026-07-11T10:24:00+08:00", "2026-07-11T10:28:59+08:00") is False
+    assert should_show_message_time("2026-07-11T10:24:00+08:00", "2026-07-11T10:29:00+08:00") is True
+    source = (Path(__file__).resolve().parents[1] / "firefly" / "desktop" / "chat_window.py").read_text(
+        encoding="utf-8"
+    )
+    assert 'QLabel(displayed_time, container)' in source
+    assert 'setObjectName("chatMessageTime")' in source
 
 
 def test_firefly_sticker_helpers_parse_model_labels() -> None:
@@ -359,6 +367,15 @@ def test_firefly_live2d_menu_has_music_action() -> None:
     assert "mouseDoubleClickEvent" in text
     assert "doubleClickInterval" in text
     assert "_ignore_release_after_double_click" in text
+
+
+def test_firefly_live2d_javascript_waits_for_webengine_page() -> None:
+    text = (Path(__file__).resolve().parents[1] / "firefly" / "desktop" / "pet_window.py").read_text(encoding="utf-8")
+
+    assert "if self._live2d_ready:" in text
+    assert "loadFinished.connect" in text
+    assert "renderProcessTerminated.connect" in text
+    assert text.count(".runJavaScript(") == 1
 
 
 def test_firefly_live2d_non_music_stops_sound() -> None:
@@ -877,6 +894,73 @@ def test_firefly_chat_window_routes_background_reply_to_original_conversation() 
             app.processEvents()
 
 
+def test_firefly_chat_window_routes_reply_after_worker_mapping_is_cleaned() -> None:
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    from PySide6.QtWidgets import QApplication
+
+    from firefly.desktop.chat_window import ChatWindow
+    from firefly.runtime import FireflyRuntime
+
+    app = QApplication.instance() or QApplication([])
+    with TemporaryDirectory() as tmp:
+        workspace = initialize_workspace(Path(tmp) / ".firefly")
+        window = ChatWindow(FireflyRuntime(cwd=tmp, workspace=workspace), workspace)
+        try:
+            source = window.conversations[0]
+            window.conversations.append({"title": "对话 2", "history": [], "messages": []})
+            window.load_conversation(1)
+            window.worker_conversations.clear()
+
+            window.handle_reply("第一条", "后台回复", None, conversation=source)
+
+            assert window.messages == []
+            assert source["messages"][-1]["content"] == "后台回复"
+            assert source["history"][-1] == {"role": "assistant", "content": "后台回复"}
+        finally:
+            window.deleteLater()
+            app.processEvents()
+
+
+def test_firefly_chat_worker_reply_returns_to_main_thread() -> None:
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    from PySide6.QtCore import QThread
+    from PySide6.QtWidgets import QApplication
+
+    from firefly.desktop.chat_window import ChatWindow
+    from firefly.runtime import FireflyRuntime
+
+    app = QApplication.instance() or QApplication([])
+    with TemporaryDirectory() as tmp:
+        workspace = initialize_workspace(Path(tmp) / ".firefly")
+        window = ChatWindow(FireflyRuntime(cwd=tmp, workspace=workspace), workspace)
+        try:
+            source = window.conversations[0]
+            window.conversations.append({"title": "对话 2", "history": [], "messages": []})
+            window.load_conversation(1)
+            mood_threads: list[bool] = []
+            window.set_live2d_mood_sender(
+                lambda _mood: mood_threads.append(QThread.currentThread() == app.thread())
+            )
+
+            emitter = threading.Thread(
+                target=lambda: window.worker_reply_ready.emit(source, "第一条", "后台回复", None)
+            )
+            emitter.start()
+            emitter.join()
+            for _ in range(100):
+                app.processEvents()
+                if mood_threads:
+                    break
+                threading.Event().wait(0.01)
+
+            assert mood_threads == [True]
+            assert window.messages == []
+            assert source["messages"][-1]["content"] == "后台回复"
+        finally:
+            window.deleteLater()
+            app.processEvents()
+
+
 def test_firefly_chat_window_can_switch_while_other_conversation_is_busy() -> None:
     os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
     from PySide6.QtCore import QThread
@@ -917,6 +1001,31 @@ def test_firefly_chat_window_starts_worker_before_syncing_busy_state() -> None:
     send_message = text.split("def send_message", 1)[1].split("def handle_local_permission_command", 1)[0]
 
     assert send_message.index("thread.start()") < send_message.index("self.sync_composer_state()")
+
+
+def test_firefly_desktop_lock_rejects_a_second_instance(tmp_path: Path) -> None:
+    from firefly.desktop.app import acquire_desktop_lock
+
+    first = acquire_desktop_lock(tmp_path / "desktop.lock")
+    second = acquire_desktop_lock(tmp_path / "desktop.lock")
+    try:
+        assert first is not None
+        assert second is None
+    finally:
+        if first is not None:
+            first.unlock()
+
+
+def test_firefly_desktop_uses_hardware_webgl(monkeypatch) -> None:
+    from firefly.desktop.app import configure_desktop_runtime
+
+    monkeypatch.setenv("QTWEBENGINE_CHROMIUM_FLAGS", "--use-angle=swiftshader --disable-gpu-compositing")
+    monkeypatch.setenv("QT_OPENGL", "software")
+
+    configure_desktop_runtime()
+
+    assert os.environ["QTWEBENGINE_CHROMIUM_FLAGS"] == "--no-proxy-server"
+    assert "QT_OPENGL" not in os.environ
 
 
 def test_firefly_autostart_command_uses_firefly_script(monkeypatch) -> None:
@@ -1198,6 +1307,7 @@ def test_firefly_watch_worker_can_skip_memory_write() -> None:
 
 def test_firefly_runtime_can_skip_memory_context(monkeypatch, tmp_path) -> None:
     calls: list[str] = []
+    sent: list[str] = []
 
     def fake_build_memory_context(*_args, **_kwargs):
         calls.append("memory")
@@ -1216,6 +1326,9 @@ def test_firefly_runtime_can_skip_memory_context(monkeypatch, tmp_path) -> None:
         return None
 
     monkeypatch.setattr(firefly_runtime, "build_memory_context", fake_build_memory_context)
+    monkeypatch.setattr(
+        firefly_runtime, "enqueue_companion_imprint_memory_context", lambda _config, context: sent.append(context)
+    )
     monkeypatch.setattr(firefly_runtime, "build_openharness_context", fake_build_openharness_context)
     monkeypatch.setattr(firefly_runtime, "build_runtime", fake_build_runtime)
     monkeypatch.setattr(firefly_runtime, "handle_line", fake_handle_line)
@@ -1232,6 +1345,40 @@ def test_firefly_runtime_can_skip_memory_context(monkeypatch, tmp_path) -> None:
     )
 
     assert calls == []
+    assert sent == [""]
+
+
+def test_firefly_runtime_sends_only_retrieved_memory_context_to_sidecar(monkeypatch, tmp_path) -> None:
+    sent: list[str] = []
+
+    monkeypatch.setattr(
+        firefly_runtime, "build_memory_context", lambda *_args, **_kwargs: "## 本地回退\n- 不得发送"
+    )
+    monkeypatch.setattr(
+        firefly_runtime, "build_everos_memory_context", lambda *_args, **_kwargs: "## EverOS 记忆\n- 用户喜欢纸鹤"
+    )
+    monkeypatch.setattr(
+        firefly_runtime, "enqueue_companion_imprint_memory_context", lambda _config, context: sent.append(context)
+    )
+    monkeypatch.setattr(firefly_runtime, "build_openharness_context", lambda *_args: asyncio.sleep(0, result=""))
+    monkeypatch.setattr(
+        firefly_runtime,
+        "build_runtime",
+        lambda **_kwargs: asyncio.sleep(0, result=SimpleNamespace(engine=SimpleNamespace(tool_metadata={}, model="test"))),
+    )
+    monkeypatch.setattr(firefly_runtime, "handle_line", lambda *_args, **_kwargs: asyncio.sleep(0, result=True))
+    monkeypatch.setattr(firefly_runtime, "start_runtime", lambda _bundle: asyncio.sleep(0))
+    monkeypatch.setattr(firefly_runtime, "close_runtime", lambda _bundle: asyncio.sleep(0))
+
+    asyncio.run(
+        firefly_runtime.run_firefly_prompt(
+            prompt="这是当前原始提问",
+            workspace=tmp_path,
+            cwd=tmp_path,
+        )
+    )
+
+    assert sent == ["## EverOS 记忆\n- 用户喜欢纸鹤"]
 
 
 def test_firefly_runtime_disables_image_tool_without_image_intent(monkeypatch, tmp_path) -> None:
@@ -1370,6 +1517,23 @@ def test_firefly_memory_context_prefers_everos_over_session(monkeypatch) -> None
 
         assert context == "EverOS hit: 查记忆"
         assert "OpenHarness session memory" not in context
+
+
+def test_sidecar_memory_context_does_not_fall_back_outside_everos(monkeypatch) -> None:
+    class FailedEverOSClient:
+        def search_everos_context(self, _prompt: str) -> str:
+            return ""
+
+    with TemporaryDirectory() as tmp:
+        workspace = initialize_workspace(Path(tmp) / ".firefly")
+        config = {
+            "memory_enabled": True,
+            "everos_memory_enabled": True,
+            "openharness_session_memory_enabled": True,
+        }
+        monkeypatch.setattr("firefly.memory.create_everos_client", lambda _config, _workspace: FailedEverOSClient())
+
+        assert build_everos_memory_context("原始提问不得发送", config, workspace) == ""
 
 
 def test_firefly_library_context_reads_allowed_directory() -> None:
@@ -1884,6 +2048,48 @@ def test_firefly_plain_text_chat_has_no_general_timeout(monkeypatch) -> None:
 
         assert response.text == "late"
         assert response.errors == []
+
+
+def test_firefly_runtime_forks_allow_concurrent_chat_requests(monkeypatch, tmp_path: Path) -> None:
+    active = 0
+    peak = 0
+    lock = threading.Lock()
+    both_started = threading.Event()
+    release = threading.Event()
+
+    async def concurrent_prompt(**kwargs):
+        nonlocal active, peak
+        with lock:
+            active += 1
+            peak = max(peak, active)
+            if active == 2:
+                both_started.set()
+        release.wait(2)
+        with lock:
+            active -= 1
+        return firefly_runtime.FireflyResponse(text=str(kwargs["prompt"]))
+
+    monkeypatch.setattr(firefly_runtime, "run_firefly_prompt", concurrent_prompt)
+    runtime = FireflyRuntime(
+        cwd=str(tmp_path), workspace=tmp_path / ".firefly", model="demo", provider_profile="local"
+    )
+    runtimes = [runtime.fork(), runtime.fork()]
+    results: list[str] = []
+    threads = [
+        threading.Thread(target=lambda pair=pair: results.append(pair[0].chat(pair[1]).text))
+        for pair in zip(runtimes, ("第一条", "第二条"))
+    ]
+    for thread in threads:
+        thread.start()
+    concurrent = both_started.wait(1)
+    release.set()
+    for thread in threads:
+        thread.join(3)
+
+    assert concurrent is True
+    assert peak == 2
+    assert sorted(results) == ["第一条", "第二条"]
+    assert all(item.model == "demo" and item.provider_profile == "local" for item in runtimes)
 
 
 def test_firefly_normalizes_empty_assistant_error() -> None:

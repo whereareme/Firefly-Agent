@@ -175,6 +175,7 @@ class PetWindow(QWidget):
         self._single_click_timer.timeout.connect(self.open_chat_from_click)
         self.last_agent_reply = ""
         self._speech_token = 0
+        self._live2d_ready = False
 
         self.setWindowTitle("Firefly")
         self.setWindowFlags(Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint | Qt.Tool)
@@ -201,6 +202,8 @@ class PetWindow(QWidget):
         page = self.view.page()
         if hasattr(page, "setBackgroundColor"):
             page.setBackgroundColor(QColor(0, 0, 0, 0))
+        self.view.loadFinished.connect(lambda ok: setattr(self, "_live2d_ready", bool(ok)))
+        page.renderProcessTerminated.connect(lambda *_args: setattr(self, "_live2d_ready", False))
         self.view.load(QUrl(url))
 
         self.speech_bubble = Live2DSpeechBubble()
@@ -436,13 +439,17 @@ class PetWindow(QWidget):
 
     def focus_live2d(self, point: QPoint) -> None:
         self._focus_active = True
-        self.view.page().runJavaScript(f"window.fireAgentLive2D?.focus({point.x()}, {point.y()})")
+        self.run_live2d_script(f"window.fireAgentLive2D?.focus({point.x()}, {point.y()})")
 
     def reset_live2d_focus(self) -> None:
         if not self._focus_active:
             return
         self._focus_active = False
-        self.view.page().runJavaScript("window.fireAgentLive2D?.resetFocus()")
+        self.run_live2d_script("window.fireAgentLive2D?.resetFocus()")
+
+    def run_live2d_script(self, script: str) -> None:
+        if self._live2d_ready:
+            self.view.page().runJavaScript(script)
 
     def set_live2d_mood(self, mood: str) -> None:
         safe = "".join(ch for ch in mood if ch.isalnum() or ch in {"_", "-"})
@@ -451,7 +458,7 @@ class PetWindow(QWidget):
             self._music_protect_timer.start(205_000)
         elif safe:
             self.clear_music_protection()
-        self.view.page().runJavaScript(f"window.fireAgentLive2D?.setMood('{safe}')")
+        self.run_live2d_script(f"window.fireAgentLive2D?.setMood('{safe}')")
 
     def play_starfire_music(self, command: str) -> None:
         config = load_config(self.workspace)
@@ -473,7 +480,7 @@ class PetWindow(QWidget):
             "mode": "random" if command == "random" else str(config.get("starfire_music_mode") or "sequence"),
             "tracks": tracks,
         }
-        self.view.page().runJavaScript(f"window.fireAgentLive2D?.music({json.dumps(payload, ensure_ascii=False)})")
+        self.run_live2d_script(f"window.fireAgentLive2D?.music({json.dumps(payload, ensure_ascii=False)})")
 
     def set_live2d_mood_from_watch(self, mood: str) -> None:
         if self._music_protected:

@@ -40,7 +40,7 @@ channels = [
     "lark-oapi>=1.5.0",
 ]
 firefly = [
-    "PySide6>=6.7.0",
+    "PySide6>=6.7.0,<6.11",
     "pypdf>=4.0.0",
 ]
 dev = [

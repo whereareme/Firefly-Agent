@@ -1,0 +1,1004 @@
+{
+  "id": "chapter-01",
+  "title": "第一章：初识",
+  "description": "第一章 Galgame 动态导演资源包。LLM 只能选择本清单中真实存在的 scene 与 sprite。",
+  "rules": {
+    "scene_continuity": "保持当前场景，只有文本明确发生地点、时间或天气变化时才切换 scene。",
+    "invalid_asset": "如果模型返回不存在的 scene 或 sprite，调用方应要求模型重试或替换为同语义的现有资源。",
+    "outfit_consistency": "同一连续场景内优先保持服装一致，只有回家、外出、夜间等明确变化时切换服装。"
+  },
+  "scenes": {
+    "apartment_morning": {
+      "file": "scenes/apartment_morning.png",
+      "name_zh": "清晨公寓",
+      "location": "home",
+      "time": "morning",
+      "mood": [
+        "calm",
+        "daily",
+        "private"
+      ],
+      "tags": [
+        "indoor",
+        "home",
+        "conversation"
+      ]
+    },
+    "apartment_entrance_morning": {
+      "file": "scenes/apartment_entrance_morning.png",
+      "name_zh": "公寓门口",
+      "location": "home_entrance",
+      "time": "morning",
+      "mood": [
+        "start",
+        "tentative",
+        "daily"
+      ],
+      "tags": [
+        "outdoor",
+        "residential",
+        "meeting"
+      ]
+    },
+    "shopping_street_day": {
+      "file": "scenes/shopping_street_day.png",
+      "name_zh": "白天商店街",
+      "location": "shopping_street",
+      "time": "day",
+      "mood": [
+        "casual",
+        "outing",
+        "bright"
+      ],
+      "tags": [
+        "outdoor",
+        "street",
+        "outing"
+      ]
+    },
+    "cafe_afternoon": {
+      "file": "scenes/cafe_afternoon.png",
+      "name_zh": "午后咖啡店",
+      "location": "cafe",
+      "time": "afternoon",
+      "mood": [
+        "warm",
+        "rest",
+        "talk"
+      ],
+      "tags": [
+        "indoor",
+        "cafe",
+        "choice"
+      ]
+    },
+    "park_late_afternoon": {
+      "file": "scenes/park_late_afternoon.png",
+      "name_zh": "傍晚公园",
+      "location": "park",
+      "time": "late_afternoon",
+      "mood": [
+        "quiet",
+        "hesitant",
+        "open"
+      ],
+      "tags": [
+        "outdoor",
+        "park",
+        "talk"
+      ]
+    },
+    "outdoor_long_bench_evening": {
+      "file": "scenes/outdoor_long_bench_evening.png",
+      "name_zh": "户外长座椅",
+      "location": "bench",
+      "time": "evening",
+      "mood": [
+        "pause",
+        "heart_to_heart",
+        "choice"
+      ],
+      "tags": [
+        "outdoor",
+        "bench",
+        "important_choice"
+      ]
+    },
+    "street_evening": {
+      "file": "scenes/street_evening.png",
+      "name_zh": "黄昏街道",
+      "location": "street",
+      "time": "evening",
+      "mood": [
+        "expectant",
+        "turning_point",
+        "daily"
+      ],
+      "tags": [
+        "outdoor",
+        "street",
+        "return"
+      ]
+    },
+    "riverside_cloudy": {
+      "file": "scenes/riverside_cloudy.png",
+      "name_zh": "阴天河边",
+      "location": "riverside",
+      "time": "afternoon",
+      "mood": [
+        "reflective",
+        "soft",
+        "uncertain"
+      ],
+      "tags": [
+        "outdoor",
+        "riverside",
+        "slow_talk"
+      ]
+    },
+    "station_dusk": {
+      "file": "scenes/station_dusk.png",
+      "name_zh": "黄昏车站",
+      "location": "station",
+      "time": "dusk",
+      "mood": [
+        "parting",
+        "waiting",
+        "quiet"
+      ],
+      "tags": [
+        "outdoor",
+        "station",
+        "departure"
+      ]
+    },
+    "store_night": {
+      "file": "scenes/store_night.png",
+      "name_zh": "夜晚便利店",
+      "location": "store",
+      "time": "night",
+      "mood": [
+        "late",
+        "ordinary",
+        "warm"
+      ],
+      "tags": [
+        "outdoor",
+        "store",
+        "night"
+      ]
+    },
+    "residential_rain_night": {
+      "file": "scenes/residential_rain_night.png",
+      "name_zh": "雨夜住宅街",
+      "location": "residential_street",
+      "time": "night",
+      "weather": "rain",
+      "mood": [
+        "vulnerable",
+        "quiet",
+        "distance"
+      ],
+      "tags": [
+        "outdoor",
+        "rain",
+        "night",
+        "serious"
+      ]
+    },
+    "room_night": {
+      "file": "scenes/room_night.png",
+      "name_zh": "夜晚房间",
+      "location": "room",
+      "time": "night",
+      "mood": [
+        "private",
+        "late",
+        "intimate"
+      ],
+      "tags": [
+        "indoor",
+        "home",
+        "night_talk"
+      ]
+    },
+    "apartment_mailboxes_morning": {
+      "file": "scenes/apartment_mailboxes_morning.png",
+      "name_zh": "清晨信箱区",
+      "location": "mailboxes",
+      "time": "morning",
+      "mood": [
+        "daily",
+        "task",
+        "meeting"
+      ],
+      "tags": [
+        "indoor",
+        "mailbox",
+        "flyers",
+        "apartment"
+      ]
+    },
+    "apartment_mailboxes_rain_night": {
+      "file": "scenes/apartment_mailboxes_rain_night.png",
+      "name_zh": "雨夜信箱区",
+      "location": "mailboxes",
+      "time": "night",
+      "weather": "rain",
+      "mood": [
+        "quiet",
+        "repair",
+        "distance"
+      ],
+      "tags": [
+        "indoor",
+        "mailbox",
+        "rain",
+        "night",
+        "serious"
+      ]
+    },
+    "community_notice_board_day": {
+      "file": "scenes/community_notice_board_day.png",
+      "name_zh": "社区公告栏",
+      "location": "notice_board",
+      "time": "day",
+      "mood": [
+        "daily",
+        "task",
+        "neighborhood"
+      ],
+      "tags": [
+        "outdoor",
+        "notice_board",
+        "flyers",
+        "community"
+      ]
+    },
+    "community_notice_board_evening": {
+      "file": "scenes/community_notice_board_evening.png",
+      "name_zh": "黄昏社区公告栏",
+      "location": "notice_board",
+      "time": "evening",
+      "mood": [
+        "after_task",
+        "soft",
+        "daily"
+      ],
+      "tags": [
+        "outdoor",
+        "notice_board",
+        "evening",
+        "community"
+      ]
+    },
+    "tabletop_task_day": {
+      "file": "scenes/tabletop_task_day.png",
+      "name_zh": "桌面小任务",
+      "location": "tabletop",
+      "time": "day",
+      "mood": [
+        "collaboration",
+        "warm",
+        "daily"
+      ],
+      "tags": [
+        "indoor",
+        "table",
+        "flyers",
+        "writing",
+        "task"
+      ]
+    },
+    "tabletop_task_night": {
+      "file": "scenes/tabletop_task_night.png",
+      "name_zh": "夜晚桌面小任务",
+      "location": "tabletop",
+      "time": "night",
+      "mood": [
+        "late",
+        "quiet",
+        "focused"
+      ],
+      "tags": [
+        "indoor",
+        "table",
+        "writing",
+        "night",
+        "task"
+      ]
+    },
+    "store_interior_night": {
+      "file": "scenes/store_interior_night.png",
+      "name_zh": "便利店内",
+      "location": "store_interior",
+      "time": "night",
+      "mood": [
+        "late",
+        "ordinary",
+        "warm"
+      ],
+      "tags": [
+        "indoor",
+        "store",
+        "snack",
+        "night"
+      ]
+    },
+    "park_bench_close_afternoon": {
+      "file": "scenes/park_bench_close_afternoon.png",
+      "name_zh": "公园长椅近景",
+      "location": "bench",
+      "time": "late_afternoon",
+      "mood": [
+        "pause",
+        "heart_to_heart",
+        "choice"
+      ],
+      "tags": [
+        "outdoor",
+        "bench",
+        "close",
+        "important_choice"
+      ]
+    },
+    "park_bench_close_rain": {
+      "file": "scenes/park_bench_close_rain.png",
+      "name_zh": "雨中公园长椅",
+      "location": "bench",
+      "time": "night",
+      "weather": "rain",
+      "mood": [
+        "vulnerable",
+        "repair",
+        "quiet"
+      ],
+      "tags": [
+        "outdoor",
+        "bench",
+        "rain",
+        "serious"
+      ]
+    },
+    "apartment_corridor_evening": {
+      "file": "scenes/apartment_corridor_evening.png",
+      "name_zh": "黄昏公寓走廊",
+      "location": "apartment_corridor",
+      "time": "evening",
+      "mood": [
+        "tentative",
+        "return",
+        "daily"
+      ],
+      "tags": [
+        "indoor",
+        "corridor",
+        "apartment",
+        "evening"
+      ]
+    },
+    "apartment_corridor_night": {
+      "file": "scenes/apartment_corridor_night.png",
+      "name_zh": "夜晚公寓走廊",
+      "location": "apartment_corridor",
+      "time": "night",
+      "mood": [
+        "quiet",
+        "late",
+        "uncertain"
+      ],
+      "tags": [
+        "indoor",
+        "corridor",
+        "apartment",
+        "night"
+      ]
+    },
+    "cafe_table_rollcake_afternoon": {
+      "file": "scenes/cafe_table_rollcake_afternoon.png",
+      "name_zh": "咖啡店蛋糕桌",
+      "location": "cafe_table",
+      "time": "afternoon",
+      "mood": [
+        "warm",
+        "shy",
+        "rest"
+      ],
+      "tags": [
+        "indoor",
+        "cafe",
+        "cake",
+        "table",
+        "choice"
+      ]
+    },
+    "rooftop_sunset": {
+      "file": "scenes/rooftop_sunset.png",
+      "name_zh": "黄昏屋顶",
+      "location": "rooftop",
+      "time": "sunset",
+      "mood": [
+        "reflective",
+        "open",
+        "turning_point"
+      ],
+      "tags": [
+        "outdoor",
+        "rooftop",
+        "sunset",
+        "slow_talk"
+      ]
+    },
+    "residential_crosswalk_morning": {
+      "file": "scenes/residential_crosswalk_morning.png",
+      "name_zh": "清晨住宅路口",
+      "location": "residential_crosswalk",
+      "time": "morning",
+      "mood": [
+        "daily",
+        "outing",
+        "bright"
+      ],
+      "tags": [
+        "outdoor",
+        "street",
+        "crosswalk",
+        "morning"
+      ]
+    },
+    "apartment_elevator_hall": {
+      "file": "scenes/apartment_elevator_hall.png",
+      "name_zh": "公寓电梯厅",
+      "location": "elevator_hall",
+      "time": "day",
+      "mood": [
+        "quiet",
+        "meeting",
+        "daily"
+      ],
+      "tags": [
+        "indoor",
+        "apartment",
+        "elevator",
+        "corridor"
+      ]
+    },
+    "station_ticket_gate_evening": {
+      "file": "scenes/station_ticket_gate_evening.png",
+      "name_zh": "黄昏车站闸机",
+      "location": "station_gate",
+      "time": "evening",
+      "mood": [
+        "waiting",
+        "parting",
+        "quiet"
+      ],
+      "tags": [
+        "indoor",
+        "station",
+        "ticket_gate",
+        "departure"
+      ]
+    },
+    "bookstore_afternoon": {
+      "file": "scenes/bookstore_afternoon.png",
+      "name_zh": "午后书店",
+      "location": "bookstore",
+      "time": "afternoon",
+      "mood": [
+        "thoughtful",
+        "quiet",
+        "gentle"
+      ],
+      "tags": [
+        "indoor",
+        "bookstore",
+        "reading",
+        "slow_talk"
+      ]
+    },
+    "laundromat_evening": {
+      "file": "scenes/laundromat_evening.png",
+      "name_zh": "傍晚洗衣房",
+      "location": "laundromat",
+      "time": "evening",
+      "mood": [
+        "daily",
+        "awkward",
+        "ordinary"
+      ],
+      "tags": [
+        "indoor",
+        "laundromat",
+        "daily",
+        "evening"
+      ]
+    },
+    "vending_machines_night": {
+      "file": "scenes/vending_machines_night.png",
+      "name_zh": "夜晚自动贩卖机",
+      "location": "vending_machines",
+      "time": "night",
+      "weather": "rain",
+      "mood": [
+        "late",
+        "ordinary",
+        "quiet"
+      ],
+      "tags": [
+        "outdoor",
+        "vending_machine",
+        "night",
+        "rain",
+        "snack"
+      ]
+    },
+    "bus_stop_rain_evening": {
+      "file": "scenes/bus_stop_rain_evening.png",
+      "name_zh": "雨中公交站",
+      "location": "bus_stop",
+      "time": "evening",
+      "weather": "rain",
+      "mood": [
+        "waiting",
+        "quiet",
+        "tension"
+      ],
+      "tags": [
+        "outdoor",
+        "bus_stop",
+        "rain",
+        "bench",
+        "serious"
+      ]
+    },
+    "pedestrian_bridge_sunset": {
+      "file": "scenes/pedestrian_bridge_sunset.png",
+      "name_zh": "黄昏人行天桥",
+      "location": "pedestrian_bridge",
+      "time": "sunset",
+      "mood": [
+        "reflective",
+        "turning_point",
+        "open"
+      ],
+      "tags": [
+        "outdoor",
+        "bridge",
+        "sunset",
+        "slow_talk"
+      ]
+    },
+    "kitchen_morning": {
+      "file": "scenes/kitchen_morning.png",
+      "name_zh": "清晨厨房",
+      "location": "kitchen",
+      "time": "morning",
+      "mood": [
+        "caring",
+        "daily",
+        "warm"
+      ],
+      "tags": [
+        "indoor",
+        "home",
+        "kitchen",
+        "breakfast"
+      ]
+    }
+  },
+  "outfits": {
+    "home_soft": {
+      "name_zh": "居家柔和常服",
+      "tags": [
+        "home",
+        "indoor",
+        "daily"
+      ]
+    },
+    "outdoor_light": {
+      "name_zh": "轻便外出服",
+      "tags": [
+        "outdoor",
+        "outing",
+        "street"
+      ]
+    },
+    "night_home": {
+      "name_zh": "夜间居家服",
+      "tags": [
+        "home",
+        "night",
+        "private"
+      ]
+    }
+  },
+  "sprites": {
+    "home_neutral_stand": {
+      "file": "characters/sprites/home_neutral_stand.png",
+      "outfit": "home_soft",
+      "pose": "stand_front",
+      "expression": "neutral",
+      "mood": [
+        "calm",
+        "polite"
+      ],
+      "tags": [
+        "home",
+        "conversation"
+      ]
+    },
+    "home_happy_wave": {
+      "file": "characters/sprites/home_happy_wave.png",
+      "outfit": "home_soft",
+      "pose": "wave",
+      "expression": "happy",
+      "mood": [
+        "greeting",
+        "warm"
+      ],
+      "tags": [
+        "home",
+        "meeting"
+      ]
+    },
+    "home_shy_look_away": {
+      "file": "characters/sprites/home_shy_look_away.png",
+      "outfit": "home_soft",
+      "pose": "look_away",
+      "expression": "shy",
+      "mood": [
+        "awkward",
+        "soft"
+      ],
+      "tags": [
+        "home",
+        "choice"
+      ]
+    },
+    "home_worried_clasp": {
+      "file": "characters/sprites/home_worried_clasp.png",
+      "outfit": "home_soft",
+      "pose": "clasp_chest",
+      "expression": "worried",
+      "mood": [
+        "uncertain",
+        "careful"
+      ],
+      "tags": [
+        "home",
+        "serious"
+      ]
+    },
+    "home_thoughtful_down": {
+      "file": "characters/sprites/home_thoughtful_down.png",
+      "outfit": "home_soft",
+      "pose": "lowered_gaze",
+      "expression": "thoughtful",
+      "mood": [
+        "reflective",
+        "quiet"
+      ],
+      "tags": [
+        "home",
+        "slow_talk"
+      ]
+    },
+    "home_serious_stop": {
+      "file": "characters/sprites/home_serious_stop.png",
+      "outfit": "home_soft",
+      "pose": "small_stop",
+      "expression": "serious",
+      "mood": [
+        "boundary",
+        "gentle_refusal"
+      ],
+      "tags": [
+        "home",
+        "negative_choice"
+      ]
+    },
+    "outdoor_neutral_attentive": {
+      "file": "characters/sprites/outdoor_neutral_attentive.png",
+      "outfit": "outdoor_light",
+      "pose": "hold_bag",
+      "expression": "neutral",
+      "mood": [
+        "attentive",
+        "polite"
+      ],
+      "tags": [
+        "outdoor",
+        "street",
+        "outing"
+      ]
+    },
+    "outdoor_happy_laugh": {
+      "file": "characters/sprites/outdoor_happy_laugh.png",
+      "outfit": "outdoor_light",
+      "pose": "small_laugh",
+      "expression": "happy",
+      "mood": [
+        "relaxed",
+        "bright"
+      ],
+      "tags": [
+        "outdoor",
+        "outing",
+        "positive_choice"
+      ]
+    },
+    "outdoor_awkward_sleeve": {
+      "file": "characters/sprites/outdoor_awkward_sleeve.png",
+      "outfit": "outdoor_light",
+      "pose": "hold_sleeve",
+      "expression": "awkward",
+      "mood": [
+        "hesitant",
+        "uncertain"
+      ],
+      "tags": [
+        "outdoor",
+        "choice",
+        "middle_choice"
+      ]
+    },
+    "outdoor_hurt_grip": {
+      "file": "characters/sprites/outdoor_hurt_grip.png",
+      "outfit": "outdoor_light",
+      "pose": "grip_bag",
+      "expression": "hurt",
+      "mood": [
+        "sad",
+        "restrained"
+      ],
+      "tags": [
+        "outdoor",
+        "negative_choice",
+        "rain"
+      ]
+    },
+    "outdoor_surprised_turn": {
+      "file": "characters/sprites/outdoor_surprised_turn.png",
+      "outfit": "outdoor_light",
+      "pose": "turn_back",
+      "expression": "surprised",
+      "mood": [
+        "caught_off_guard",
+        "meeting"
+      ],
+      "tags": [
+        "outdoor",
+        "street",
+        "station"
+      ]
+    },
+    "outdoor_relieved_side": {
+      "file": "characters/sprites/outdoor_relieved_side.png",
+      "outfit": "outdoor_light",
+      "pose": "side_relieved",
+      "expression": "relieved",
+      "mood": [
+        "safe",
+        "soft"
+      ],
+      "tags": [
+        "outdoor",
+        "after_tension"
+      ]
+    },
+    "night_sleepy_cheek": {
+      "file": "characters/sprites/night_sleepy_cheek.png",
+      "outfit": "night_home",
+      "pose": "touch_cheek",
+      "expression": "sleepy",
+      "mood": [
+        "late",
+        "relaxed"
+      ],
+      "tags": [
+        "night",
+        "home",
+        "quiet"
+      ]
+    },
+    "night_moved_clasp": {
+      "file": "characters/sprites/night_moved_clasp.png",
+      "outfit": "night_home",
+      "pose": "clasp_chest",
+      "expression": "moved",
+      "mood": [
+        "vulnerable",
+        "touched"
+      ],
+      "tags": [
+        "night",
+        "home",
+        "positive_choice"
+      ]
+    },
+    "night_seated_listen": {
+      "file": "characters/sprites/night_seated_listen.png",
+      "outfit": "night_home",
+      "pose": "seated_listen",
+      "expression": "neutral",
+      "mood": [
+        "listening",
+        "private"
+      ],
+      "tags": [
+        "night",
+        "home",
+        "bench"
+      ]
+    },
+    "night_seated_smile": {
+      "file": "characters/sprites/night_seated_smile.png",
+      "outfit": "night_home",
+      "pose": "seated_smile",
+      "expression": "relieved",
+      "mood": [
+        "trust",
+        "gentle"
+      ],
+      "tags": [
+        "night",
+        "home",
+        "bench",
+        "positive_choice"
+      ]
+    },
+    "outdoor_carry_box_smile": {
+      "file": "characters/sprites/outdoor_carry_box_smile.png",
+      "outfit": "outdoor_light",
+      "pose": "carry_box",
+      "expression": "happy",
+      "mood": [
+        "helpful",
+        "bright"
+      ],
+      "tags": [
+        "outdoor",
+        "task",
+        "box",
+        "flyers",
+        "positive_choice"
+      ]
+    },
+    "outdoor_hold_flyers_neutral": {
+      "file": "characters/sprites/outdoor_hold_flyers_neutral.png",
+      "outfit": "outdoor_light",
+      "pose": "hold_flyers",
+      "expression": "neutral",
+      "mood": [
+        "attentive",
+        "task"
+      ],
+      "tags": [
+        "outdoor",
+        "task",
+        "flyers",
+        "mailbox",
+        "notice_board"
+      ]
+    },
+    "outdoor_umbrella_worried": {
+      "file": "characters/sprites/outdoor_umbrella_worried.png",
+      "outfit": "outdoor_light",
+      "pose": "hold_umbrella",
+      "expression": "worried",
+      "mood": [
+        "rain",
+        "uncertain"
+      ],
+      "tags": [
+        "outdoor",
+        "rain",
+        "umbrella",
+        "serious",
+        "negative_choice"
+      ]
+    },
+    "outdoor_snack_bag_happy": {
+      "file": "characters/sprites/outdoor_snack_bag_happy.png",
+      "outfit": "outdoor_light",
+      "pose": "hold_snack",
+      "expression": "happy",
+      "mood": [
+        "casual",
+        "late_snack"
+      ],
+      "tags": [
+        "outdoor",
+        "store",
+        "snack",
+        "positive_choice"
+      ]
+    },
+    "home_write_note_thoughtful": {
+      "file": "characters/sprites/home_write_note_thoughtful.png",
+      "outfit": "home_soft",
+      "pose": "write_note",
+      "expression": "thoughtful",
+      "mood": [
+        "focused",
+        "quiet"
+      ],
+      "tags": [
+        "home",
+        "table",
+        "writing",
+        "task"
+      ]
+    },
+    "home_hold_teacup_relieved": {
+      "file": "characters/sprites/home_hold_teacup_relieved.png",
+      "outfit": "home_soft",
+      "pose": "hold_teacup",
+      "expression": "relieved",
+      "mood": [
+        "warm",
+        "rest"
+      ],
+      "tags": [
+        "home",
+        "tea",
+        "after_task"
+      ]
+    },
+    "night_hold_phone_listen": {
+      "file": "characters/sprites/night_hold_phone_listen.png",
+      "outfit": "night_home",
+      "pose": "hold_phone_seated",
+      "expression": "neutral",
+      "mood": [
+        "late",
+        "listening"
+      ],
+      "tags": [
+        "night",
+        "home",
+        "phone",
+        "private",
+        "seated"
+      ]
+    },
+    "night_blanket_sleepy": {
+      "file": "characters/sprites/night_blanket_sleepy.png",
+      "outfit": "night_home",
+      "pose": "with_blanket",
+      "expression": "sleepy",
+      "mood": [
+        "late",
+        "soft"
+      ],
+      "tags": [
+        "night",
+        "home",
+        "sleepy"
+      ]
+    },
+    "outdoor_seated_shy_bench": {
+      "file": "characters/sprites/outdoor_seated_shy_bench.png",
+      "outfit": "outdoor_light",
+      "pose": "seated_hands_lap",
+      "expression": "shy",
+      "mood": [
+        "awkward",
+        "soft",
+        "bench_talk"
+      ],
+      "tags": [
+        "outdoor",
+        "bench",
+        "seated",
+        "choice",
+        "middle_choice"
+      ]
+    }
+  },
+  "recommended_defaults": {
+    "scene": "apartment_entrance_morning",
+    "sprite": "outdoor_neutral_attentive"
+  }
+}

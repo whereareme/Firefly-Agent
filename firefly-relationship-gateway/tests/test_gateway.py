@@ -5,6 +5,7 @@ import queue
 import tempfile
 import threading
 import unittest
+from dataclasses import replace
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from unittest.mock import patch
@@ -18,9 +19,73 @@ from relationship_gateway.gateway import (
     MAX_REQUEST_BYTES,
     MAX_SSE_MARKER_FILTERS,
     RelationshipGatewayServer,
+    _direct_planned_lines,
+    _narrative_plan_from_model,
     inject_relationship_context,
 )
-from relationship_gateway.state import RelationshipState, StateError
+from relationship_gateway.narrative import (
+    CHAPTERS,
+    CHAPTER_ONE_FINALE_ID,
+    NarrativeEventSession,
+    NarrativePlan,
+    NarrativeProgress,
+    NarrativeTurn,
+)
+from relationship_gateway.state import RelationshipState, StateError, StoryLine
+
+
+def story_line(
+    speaker: str,
+    text: str,
+    expression: str = "neutral",
+    scene: str = "apartment_morning",
+    sprite: str = "home_neutral_stand",
+) -> dict[str, str]:
+    return {
+        "speaker": speaker,
+        "text": text,
+        "expression": expression,
+        "scene": scene,
+        "sprite": sprite,
+    }
+
+
+def director_plan_payload() -> dict[str, object]:
+    scenes = ("cafe_table_rollcake_afternoon",) + ("bookstore_afternoon",) * 5
+    return {
+        "plan": {
+            "premise": "两人在蛋糕店里慢慢了解彼此。",
+            "conflict": "之后的安排让双方产生了一点理解差异。",
+            "resolution": "双方把想法说清并约定以后再见。",
+            "beats": [
+                {
+                    "title": f"阶段{index + 1}",
+                    "purpose": "保持第一章边界并自然推进当前事件。",
+                    "scene": scene,
+                    "sprite": "outdoor_neutral_attentive" if index == 0 else "home_happy_wave",
+                    "allow_outfit_change": False,
+                    "directions": {
+                        "good": "交流变得更自然。",
+                        "neutral": "保持礼貌且稳定的距离。",
+                        "bad": "留下需要之后说明的小误会。",
+                    },
+                }
+                for index, scene in enumerate(scenes)
+            ],
+        },
+        "opening": {
+            "lines": [
+                story_line(
+                    "旁白" if index % 2 == 0 else "流萤",
+                    f"蛋糕店里的开场自然推进到第{index + 1}句。",
+                    scene="cafe_table_rollcake_afternoon",
+                    sprite="outdoor_neutral_attentive",
+                )
+                for index in range(8)
+            ],
+            "event_summary": "两人在蛋糕店里开始了一次自然的交谈。",
+        },
+    }
 
 
 class FakeUpstreamServer(ThreadingHTTPServer):
@@ -196,6 +261,73 @@ class GatewayTests(unittest.TestCase):
         self.assertIn("纸鹤", payload["context"])
         self.assertTrue(self.upstream.requests.empty())
 
+    def test_panel_show_route_dispatches_to_the_local_panel(self) -> None:
+        shown = threading.Event()
+        self.gateway.set_panel_show_callback(shown.set)
+
+        status, _headers, body = self.request("POST", "/relationship/panel/show", b"")
+
+        self.assertEqual(status, 202)
+        self.assertEqual(json.loads(body), {"shown": True})
+        self.assertTrue(shown.wait(timeout=1))
+        self.assertTrue(self.upstream.requests.empty())
+
+    def test_memory_context_route_keeps_latest_snapshot_only_in_memory(self) -> None:
+        private = "EverOS-private-memory"
+        body = json.dumps({"context": private, "revision": 1, "activity_date": "2026-07-14"}).encode("utf-8")
+        status, _headers, _response = self.request(
+            "POST", "/relationship/memory-context", body, {"Content-Type": "application/json"}
+        )
+
+        snapshot = self.gateway.memory_context_snapshot()
+        saved = b"".join(path.read_bytes() for path in self.root.rglob("*") if path.is_file())
+        self.assertEqual(status, 202)
+        self.assertEqual(snapshot, private)
+        self.assertNotIn(private.encode(), saved)
+        self.assertTrue(self.upstream.requests.empty())
+
+    def test_memory_context_route_rejects_extra_fields_and_oversized_text(self) -> None:
+        extra = json.dumps({"context": "memory", "revision": 1, "activity_date": "2026-07-14", "persist": True}).encode("utf-8")
+        oversized_line = json.dumps({"context": "u" * 1_001, "revision": 1, "activity_date": "2026-07-14"}).encode("utf-8")
+        oversized_total = json.dumps({"context": ("u" * 1_000 + "\n") * 8 + "u", "revision": 1, "activity_date": "2026-07-14"}).encode("utf-8")
+        invalid_date = json.dumps({"context": "memory", "revision": 1, "activity_date": "not-a-date"}).encode("utf-8")
+
+        self.assertEqual(self.request("POST", "/relationship/memory-context", extra)[0], 400)
+        self.assertEqual(self.request("POST", "/relationship/memory-context", oversized_line)[0], 400)
+        self.assertEqual(self.request("POST", "/relationship/memory-context", oversized_total)[0], 400)
+        self.assertEqual(self.request("POST", "/relationship/memory-context", invalid_date)[0], 400)
+        self.assertEqual(self.gateway.memory_context_snapshot(), "")
+
+    def test_empty_memory_context_clears_stale_snapshot(self) -> None:
+        self.gateway.remember_memory_context("old EverOS memory")
+
+        status, _headers, _response = self.request(
+            "POST",
+            "/relationship/memory-context",
+            json.dumps({"context": "", "revision": 1, "activity_date": "2026-07-14"}).encode("utf-8"),
+            {"Content-Type": "application/json"},
+        )
+
+        self.assertEqual(status, 202)
+        self.assertEqual(self.gateway.memory_context_snapshot(), "")
+
+    def test_memory_context_ignores_older_revisions_and_empty_latest_clears(self) -> None:
+        def submit(context: str, revision: int, activity_date: str) -> dict[str, object]:
+            status, _headers, body = self.request(
+                "POST", "/relationship/memory-context",
+                json.dumps({"context": context, "revision": revision, "activity_date": activity_date}).encode("utf-8"),
+                {"Content-Type": "application/json"},
+            )
+            self.assertEqual(status, 202)
+            return json.loads(body)
+
+        self.assertEqual(submit("new", 2, "2026-07-14"), {"accepted": True})
+        self.assertEqual(submit("old", 1, "2026-07-13"), {"accepted": False})
+        self.assertEqual(self.gateway.memory_context_snapshot(), "new")
+        self.assertEqual(submit("", 3, "2026-07-15"), {"accepted": True})
+        self.assertEqual(self.gateway.memory_context_snapshot(), "")
+        self.assertEqual(self.gateway.narrative_store.load().active_dates, ("2026-07-14", "2026-07-15"))
+
     def test_relationship_proposal_is_queued_without_calling_upstream(self) -> None:
         body = json.dumps({"kind": "memory", "summary": "用户认真听流萤说完了心事。"}).encode("utf-8")
 
@@ -292,6 +424,484 @@ class GatewayTests(unittest.TestCase):
         self.assertEqual(relationship_data["stage"], "acquainted")
         self.assertEqual(relationship_data["confirmed_events"], [{"kind": "gift", "summary": "A paper crane."}])
         self.assertEqual(int(captured["headers"]["Content-Length"]), len(captured["body"]))  # type: ignore[index]
+
+    def test_daily_chat_does_not_request_or_persist_legacy_story_scripts(self) -> None:
+        marker = self.marker({"kind": "story", "script": {"obsolete": True}})
+        self.upstream.chat_response = {
+            "choices": [{"message": {"role": "assistant", "content": f"日常回复。{marker}"}}]
+        }
+
+        status, _headers, body = self.chat_request(stream=False)
+
+        first_request = self.upstream.requests.get(timeout=2)
+        first_context = json.loads(first_request["body"])["messages"][0]["content"]  # type: ignore[index]
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(body)["choices"][0]["message"]["content"], "日常回复。")
+        self.assertNotIn("STORY_GENERATION_REQUEST", first_context)
+        self.assertIsNone(self.gateway.store.load_story())
+
+    def test_director_opening_generates_and_persists_one_personalized_plan(self) -> None:
+        self.gateway.remember_story_access(
+            [("Authorization", "Bearer director-token")], {"model": "selected-model"}
+        )
+        self.upstream.chat_response = {
+            "choices": [{"message": {"role": "assistant", "content": json.dumps(
+                director_plan_payload(), ensure_ascii=False
+            )}}]
+        }
+
+        updated, lines = self.gateway.start_narrative_event(
+            NarrativeEventSession.start("first-greeting", target_nodes=16),
+            "用户最近提到想找一个安静的地方聊聊天。",
+        )
+
+        captured = self.upstream.requests.get(timeout=2)
+        request_body = json.loads(captured["body"])
+        self.assertEqual(request_body["model"], "selected-model")
+        self.assertEqual(request_body["response_format"], {"type": "json_object"})
+        self.assertEqual(len(lines), 8)
+        self.assertIsNotNone(updated.director_plan)
+        self.assertEqual(updated.director_plan.target_lines, 140)  # type: ignore[union-attr]
+        self.assertEqual(updated.director_plan.choice_nodes, (3, 5, 8, 11, 13))  # type: ignore[union-attr]
+        self.assertEqual(len({beat.scene for beat in updated.director_plan.beats}), 2)  # type: ignore[union-attr]
+        self.assertEqual(self.gateway.narrative_session_store.load(), updated)
+
+    def test_invalid_director_plan_retries_without_advancing_the_session(self) -> None:
+        self.gateway.remember_story_access([], {"model": "selected-model"})
+        self.upstream.chat_response = {
+            "choices": [{"message": {"role": "assistant", "content": '{"plan":{},"opening":{}}'}}]
+        }
+
+        with self.assertRaisesRegex(StateError, "剧情大纲生成失败"):
+            self.gateway.start_narrative_event(
+                NarrativeEventSession.start("first-greeting", target_nodes=16)
+            )
+
+        self.upstream.requests.get(timeout=2)
+        self.upstream.requests.get(timeout=2)
+        self.assertIsNone(self.gateway.narrative_session_store.load())
+
+    def test_directed_visuals_ignore_place_mentions_until_an_explicit_transition(self) -> None:
+        plan, opening, summary = _narrative_plan_from_model(director_plan_payload(), 16)
+        session = NarrativeEventSession.start("first-greeting", target_nodes=16).with_director_opening(
+            plan, opening, summary
+        )
+        mentioned = _direct_planned_lines(
+            (
+                StoryLine("流萤", "我只是想起附近还有一家书店。", "neutral", "bookstore_afternoon", "home_happy_wave"),
+            ),
+            session,
+            plan,
+            1,
+        )
+        later_session = replace(session, current_node=2)
+        transitioned = _direct_planned_lines(
+            (
+                StoryLine("旁白", "你们离开蛋糕店，来到书店门口。", "neutral"),
+                StoryLine("流萤", "这里比刚才安静一些。", "relieved"),
+            ),
+            later_session,
+            plan,
+            3,
+        )
+
+        self.assertEqual(mentioned[0].scene, "cafe_table_rollcake_afternoon")
+        self.assertEqual(mentioned[0].sprite, "outdoor_neutral_attentive")
+        self.assertEqual(transitioned[0].scene, "cafe_table_rollcake_afternoon")
+        self.assertEqual(transitioned[1].scene, "bookstore_afternoon")
+        self.assertEqual(transitioned[1].sprite, "outdoor_neutral_attentive")
+
+    def test_chapter_finale_freezes_a_personal_cg_brief_without_starting_a_job(self) -> None:
+        chapter = CHAPTERS[0]
+        self.gateway.narrative_store.save(replace(
+            NarrativeProgress.default(),
+            completed_event_ids=chapter.required_event_ids,
+            active_dates=tuple(f"2026-07-{day:02d}" for day in range(1, chapter.minimum_active_days + 1)),
+            familiarity=chapter.required_axes[0],
+            consistency=chapter.required_axes[1],
+            boundaries=chapter.required_axes[2],
+            authenticity=chapter.required_axes[3],
+        ))
+        turn_value = {
+            "lines": [
+                story_line("旁白", "夕阳落在回去的路上。", scene="street_evening"),
+                story_line("流萤", "那就下次再见。", "shy", scene="street_evening", sprite="outdoor_awkward_sleeve"),
+                story_line("旁白", "她把这份期待留在了今天。", scene="street_evening"),
+            ],
+            "next_node_type": "free_input",
+            "choices": [],
+            "hidden_outcome": "good",
+            "axis_changes": {"familiarity": 1, "consistency": 1, "boundaries": 1, "authenticity": 1},
+            "add_flags": [],
+            "resolve_flags": [],
+            "user_summary": "用户表达了愿意再次见面的想法。",
+            "event_summary": "双方在夕阳下约定以后再见。",
+            "continuity_facts": ["双方在夕阳下约定以后再见。"],
+            "event_complete": False,
+        }
+        session = NarrativeEventSession.start(CHAPTER_ONE_FINALE_ID, target_nodes=6)
+        for index in range(6):
+            complete = index == 5
+            session = session.append(NarrativeTurn.from_dict({
+                **turn_value,
+                "next_node_type": "complete" if complete else "free_input",
+                "event_complete": complete,
+            }))
+
+        self.gateway._record_completed_narrative(session)
+
+        value = self.gateway.visual_library.load()
+        brief = value["chapter_cg_briefs"][0]
+        self.assertIn("用户第一人称视角", brief["prompt"])
+        self.assertIn("视线、距离、姿态和动作必须由章节事实决定", brief["prompt"])
+        self.assertEqual(self.gateway.visual_library.chapter_cg_status(chapter.id)["count"], 0)
+        self.assertIsNone(self.gateway.visual_library.pending_chapter_job())
+
+    def test_narrative_event_uses_current_model_and_persists_safe_session(self) -> None:
+        secret = "Bearer narrative-token"
+        self.gateway.remember_story_access([("Authorization", secret)], {"model": "selected-model"})
+        result = {
+            "lines": [
+                story_line("旁白", "她停下来听你说完。", "neutral"),
+                story_line("流萤", "原来你更喜欢简单一点的问候。", "relieved", sprite="home_thoughtful_down"),
+                story_line("流萤", "那我下次会先问问你现在方不方便。", "happy", sprite="home_happy_wave"),
+            ],
+            "next_node_type": "free_input",
+            "choices": [],
+            "hidden_outcome": "good",
+            "axis_changes": {"familiarity": 1, "consistency": 1, "boundaries": 0, "authenticity": 1},
+            "add_flags": [],
+            "resolve_flags": [],
+            "user_summary": "用户偏好简短且先确认时机的问候。",
+            "event_summary": "双方开始确认合适的问候节奏。",
+            "event_complete": False,
+        }
+        result["lines"] *= 2
+        self.upstream.chat_response = {
+            "choices": [{"message": {"role": "assistant", "content": json.dumps(result, ensure_ascii=False)}}]
+        }
+
+        updated, turn = self.gateway.continue_narrative_event(
+            NarrativeEventSession.start("first-greeting"),
+            "我比较喜欢简单一点，先问我忙不忙。",
+            "## EverOS 记忆\n- 用户近期工作较忙。",
+        )
+
+        captured = self.upstream.requests.get(timeout=2)
+        request_body = json.loads(captured["body"])
+        saved = self.gateway.narrative_session_store.path.read_text(encoding="utf-8")
+        self.assertEqual(request_body["model"], "selected-model")
+        self.assertEqual(request_body["response_format"], {"type": "json_object"})
+        self.assertEqual(captured["headers"]["Authorization"], secret)  # type: ignore[index]
+        self.assertEqual(updated.current_node, 1)
+        self.assertEqual(turn.hidden_outcome, "good")
+        self.assertNotIn(secret, saved)
+        self.assertNotIn("我比较喜欢简单一点", saved)
+        self.assertEqual(updated.user_summaries, ("用户偏好简短且先确认时机的问候。",))
+
+    def test_narrative_persistence_removes_raw_and_contained_model_echoes(self) -> None:
+        reply = "抱住她并告诉她今天不用害怕"
+        self.gateway.remember_story_access(
+            [("Authorization", "Bearer privacy-token")], {"model": "selected-model"}
+        )
+        result = {
+            "lines": [
+                story_line("旁白", f"你选择{reply}。", "neutral"),
+                story_line("流萤", reply, "relieved", sprite="home_thoughtful_down"),
+                story_line("流萤", "那我们慢慢来。", "happy", sprite="home_happy_wave"),
+            ],
+            "next_node_type": "choice", "choices": [reply, "先听她说"], "hidden_outcome": "good",
+            "axis_changes": {"familiarity": 1, "consistency": 0, "boundaries": 0, "authenticity": 1},
+            "add_flags": [reply], "resolve_flags": [],
+            "user_summary": "用户通过主动靠近表达安慰。",
+            "event_summary": f"用户{reply}，流萤接受了。", "event_complete": False,
+        }
+        result["lines"] *= 2
+        self.upstream.chat_response = {
+            "choices": [{"message": {"role": "assistant", "content": json.dumps(result, ensure_ascii=False)}}]
+        }
+
+        self.gateway.continue_narrative_event(NarrativeEventSession.start("first-greeting"), reply)
+
+        self.upstream.requests.get(timeout=2)
+        narrative_payloads = b"".join(
+            path.read_bytes() for path in (
+                self.gateway.narrative_store.path,
+                self.gateway.narrative_session_store.path,
+            ) if path.exists()
+        ).decode("utf-8")
+        self.assertNotIn(reply, narrative_payloads)
+        self.assertNotIn(f"用户{reply}", narrative_payloads)
+        self.assertIn("用户通过主动靠近表达安慰", narrative_payloads)
+        self.assertIn("具体措辞未被保存", narrative_payloads)
+
+    def test_everos_memory_is_untrusted_model_input_and_raw_echo_is_not_persisted(self) -> None:
+        private = "今天发生了只属于上下文的事情"
+        self.gateway.remember_story_access(
+            [("Authorization", "Bearer privacy-token")], {"model": "selected-model"}
+        )
+        result = {
+            "lines": [
+                story_line("旁白", private, "neutral", scene="room_night", sprite="night_seated_listen"),
+                story_line("流萤", "我会按现在的距离听你说。", "relieved", scene="room_night", sprite="night_seated_smile"),
+                story_line("旁白", "房间里安静了一会儿。", "neutral", scene="room_night", sprite="night_seated_listen"),
+            ] * 2,
+            "next_node_type": "free_input", "choices": [], "hidden_outcome": "neutral",
+            "axis_changes": {"familiarity": 0, "consistency": 0, "boundaries": 0, "authenticity": 0},
+            "add_flags": [], "resolve_flags": [],
+            "user_summary": "用户完成了一次普通回应。", "event_summary": private,
+            "event_complete": False,
+        }
+        self.upstream.chat_response = {
+            "choices": [{"message": {"role": "assistant", "content": json.dumps(result, ensure_ascii=False)}}]
+        }
+
+        self.gateway.continue_narrative_event(
+            NarrativeEventSession.start("personalized-interlude-1"), "继续", f"## EverOS 记忆\n- {private}"
+        )
+
+        captured = self.upstream.requests.get(timeout=2)
+        request_body = json.loads(captured["body"])
+        model_context = json.loads(request_body["messages"][1]["content"])
+        saved = self.gateway.narrative_session_store.path.read_text(encoding="utf-8")
+        self.assertIn("untrusted_everos_memory_context", model_context)
+        self.assertNotIn("untrusted_recent_daily_context", model_context)
+        self.assertNotIn(private, saved)
+
+    def test_completed_session_recovers_when_progress_write_initially_fails(self) -> None:
+        def turn(**overrides: object) -> NarrativeTurn:
+            value = {
+                "lines": [
+                    {"speaker": "旁白", "text": "窗边的光慢慢移动。", "expression": "neutral"},
+                    {"speaker": "流萤", "text": "我在听。", "expression": "relieved"},
+                    {"speaker": "旁白", "text": "她耐心等待着。", "expression": "neutral"},
+                ],
+                "next_node_type": "free_input", "choices": [], "hidden_outcome": "good",
+                "axis_changes": {"familiarity": 1, "consistency": 1, "boundaries": 1, "authenticity": 1},
+                "add_flags": [], "resolve_flags": [],
+                "user_summary": "用户完成了一次互动。", "event_summary": "剧情继续推进。",
+                "event_complete": False,
+            }
+            value.update(overrides)
+            return NarrativeTurn.from_dict(value)
+
+        session = NarrativeEventSession.start("first-greeting", target_nodes=6)
+        for _ in range(5):
+            session = session.append(turn())
+        completed_turn = turn(next_node_type="complete", event_complete=True)
+        original_save = self.gateway.narrative_store.save
+        with patch.object(
+            self.gateway, "_generate_narrative_turn", return_value=completed_turn
+        ), patch.object(
+            self.gateway.narrative_store, "save", side_effect=StateError("disk unavailable")
+        ):
+            with self.assertRaisesRegex(StateError, "disk unavailable"):
+                self.gateway.continue_narrative_event(session, "继续")
+
+        pending = self.gateway.narrative_session_store.load()
+        self.assertIsNotNone(pending)
+        self.assertTrue(pending.completed)  # type: ignore[union-attr]
+        with patch.object(self.gateway.narrative_store, "save", side_effect=original_save):
+            recovered, _turn = self.gateway.continue_narrative_event(pending, "重试")  # type: ignore[arg-type]
+        self.assertTrue(recovered.completed)
+        self.assertIn("first-greeting", self.gateway.narrative_store.load().completed_event_ids)
+        self.assertEqual(
+            self.gateway.narrative_archive_store.get("first-greeting"),
+            recovered,
+        )
+
+    def test_narrative_update_can_retry_after_session_write_failure(self) -> None:
+        session = NarrativeEventSession.start("first-greeting")
+        fallback = NarrativeTurn.from_dict({
+            "lines": [
+                {"speaker": "旁白", "text": "她认真听着。", "expression": "neutral"},
+                {"speaker": "流萤", "text": "我们慢慢说。", "expression": "relieved"},
+                {"speaker": "旁白", "text": "谈话继续了下去。", "expression": "neutral"},
+            ],
+            "next_node_type": "free_input", "choices": [], "hidden_outcome": "neutral",
+            "axis_changes": {"familiarity": 0, "consistency": 0, "boundaries": 0, "authenticity": 0},
+            "add_flags": [], "resolve_flags": [], "user_summary": "安全摘要。",
+            "event_summary": "安全事件摘要。", "event_complete": False,
+        })
+        with patch.object(self.gateway, "_generate_narrative_turn", return_value=fallback), patch.object(
+            self.gateway.narrative_session_store, "save", side_effect=StateError("session disk unavailable")
+        ):
+            with self.assertRaisesRegex(StateError, "session disk unavailable"):
+                self.gateway.continue_narrative_event(session, "继续")
+        self.assertIsNone(self.gateway.narrative_session_store.load())
+
+        with patch.object(self.gateway, "_generate_narrative_turn", return_value=fallback):
+            recovered, _turn = self.gateway.continue_narrative_event(session, "继续")
+        self.assertEqual(recovered.current_node, 1)
+
+    def test_older_narrative_generation_cannot_overwrite_newer_session(self) -> None:
+        session = NarrativeEventSession.start("first-greeting")
+        self.gateway.remember_story_model("test-model")
+        turn = NarrativeTurn.from_dict({
+            "lines": [
+                {"speaker": "旁白", "text": "她认真听着。", "expression": "neutral"},
+                {"speaker": "流萤", "text": "我们慢慢说。", "expression": "relieved"},
+                {"speaker": "旁白", "text": "谈话继续了下去。", "expression": "neutral"},
+            ],
+            "next_node_type": "free_input", "choices": [], "hidden_outcome": "neutral",
+            "axis_changes": {"familiarity": 0, "consistency": 0, "boundaries": 0, "authenticity": 0},
+            "add_flags": [], "resolve_flags": [], "user_summary": "安全摘要。",
+            "event_summary": "安全事件摘要。", "event_complete": False,
+        })
+        slow_started = threading.Event()
+        release_slow = threading.Event()
+        errors: list[Exception] = []
+
+        def generate(_model, _credentials, _session, reply, _memory_context):
+            if reply == "慢回复":
+                slow_started.set()
+                release_slow.wait(2)
+            return turn
+
+        def run_slow() -> None:
+            try:
+                self.gateway.continue_narrative_event(session, "慢回复")
+            except Exception as error:
+                errors.append(error)
+
+        with patch.object(self.gateway, "_generate_narrative_turn", side_effect=generate):
+            thread = threading.Thread(target=run_slow)
+            thread.start()
+            self.assertTrue(slow_started.wait(1))
+            newer, _turn = self.gateway.continue_narrative_event(session, "快回复")
+            release_slow.set()
+            thread.join(2)
+
+        self.assertEqual(self.gateway.narrative_session_store.load(), newer)
+        self.assertEqual(len(errors), 1)
+        self.assertRegex(str(errors[0]), "changed while generating")
+
+    def test_invalid_narrative_output_retries_once_without_advancing(self) -> None:
+        self.gateway.remember_story_access(
+            [("Authorization", "Bearer retry-token")], {"model": "firefly-model"}
+        )
+        self.upstream.chat_response = {
+            "choices": [{"message": {"role": "assistant", "content": '{"lines":[]}'}}]
+        }
+
+        with self.assertRaisesRegex(StateError, "剧情生成失败"):
+            self.gateway.continue_narrative_event(
+                NarrativeEventSession.start("first-greeting"), "抱住她"
+            )
+
+        self.upstream.requests.get(timeout=2)
+        self.upstream.requests.get(timeout=2)
+        self.assertIsNone(self.gateway.narrative_session_store.load())
+        self.assertIn("剧情生成失败", self.gateway.last_error or "")
+
+    def test_narrative_generation_repairs_common_model_formatting_and_visual_gaps(self) -> None:
+        self.gateway.remember_story_access(
+            [("Authorization", "Bearer repair-token")], {"model": "firefly-model"}
+        )
+        result = {
+            "lines": [
+                {"speaker": "旁白", "text": "她在门口停下脚步。", "expression": "neutral"},
+                {"speaker": "流萤", "text": "我想先听听你的想法。", "expression": "relieved"},
+                {"speaker": "旁白", "text": "风从街角轻轻吹过。", "expression": "neutral"},
+            ] * 2,
+            "next_node_type": "free_input",
+            "choices": [],
+            "hidden_outcome": "neutral",
+            "axis_changes": {"familiarity": 0, "consistency": 0, "boundaries": 0, "authenticity": 0},
+            "add_flags": [],
+            "resolve_flags": [],
+            "user_summary": "用户完成一次普通回应。",
+            "event_summary": "流萤等待用户说明想法。",
+            "event_complete": False,
+        }
+        content = f"```json\n{json.dumps(result, ensure_ascii=False)}\n```"
+        self.upstream.chat_response = {
+            "choices": [{"message": {"role": "assistant", "content": content}}]
+        }
+
+        updated, turn = self.gateway.continue_narrative_event(
+            NarrativeEventSession.start("first-greeting"), "继续"
+        )
+
+        self.assertEqual(updated.current_node, 1)
+        self.assertTrue(all(line.scene for line in turn.lines))
+        self.assertTrue(all(line.sprite for line in turn.lines))
+        self.assertEqual(turn.lines[0].scene, "apartment_entrance_morning")
+
+    def test_narrative_generation_normalizes_common_model_shape_errors(self) -> None:
+        self.gateway.remember_story_access(
+            [("Authorization", "Bearer normalize-token")], {"model": "firefly-model"}
+        )
+        result = {
+            "lines": [
+                {
+                    "speaker": "流萤",
+                    "text": "这是一句稍微过长的剧情文本" * 12,
+                    "expression": "smile",
+                    "scene": "missing_scene",
+                    "sprite": "missing_sprite",
+                },
+                {"speaker": "Firefly", "text": " 我会慢慢听你说。\n", "expression": "happy", "scene": "only_scene"},
+                {"speaker": "旁白", "text": "风从街角轻轻吹过。", "expression": "neutral"},
+            ] * 3,
+            "next_node_type": "free_input",
+            "choices": [" 继续安静地聊。 ", "继续安静地聊。", "问问流萤的想法。"],
+            "hidden_outcome": "great",
+            "axis_changes": {"familiarity": "5", "consistency": -9.2, "boundaries": True, "authenticity": "x"},
+            "add_flags": [" 共同散步 "],
+            "resolve_flags": [],
+            "user_summary": " 用户继续说明自己的想法。\n",
+            "event_summary": "流萤根据用户回应继续调整交流节奏。" * 20,
+            "event_complete": False,
+            "extra": "ignored",
+        }
+        self.upstream.chat_response = {
+            "choices": [{"message": {"role": "assistant", "content": json.dumps(result, ensure_ascii=False)}}]
+        }
+
+        updated, turn = self.gateway.continue_narrative_event(
+            NarrativeEventSession.start("conversation-rhythm"), "我想慢慢聊"
+        )
+
+        self.assertEqual(updated.next_node_type, "choice")
+        self.assertEqual(updated.choices, ("继续安静地聊。", "问问流萤的想法。"))
+        self.assertEqual(turn.hidden_outcome, "neutral")
+        self.assertEqual((turn.familiarity, turn.consistency, turn.boundaries, turn.authenticity), (3, -3, 0, 0))
+        self.assertLessEqual(len(turn.lines[0].text), 160)
+        self.assertEqual(turn.lines[0].expression, "neutral")
+        self.assertTrue(all(line.scene for line in turn.lines))
+        self.assertTrue(all(line.sprite for line in turn.lines))
+
+    def test_narrative_visual_director_fixes_text_scene_mismatches(self) -> None:
+        self.gateway.remember_story_access(
+            [("Authorization", "Bearer director-token")], {"model": "firefly-model"}
+        )
+        result = {
+            "lines": [
+                story_line("旁白", "你们商量起宣传和分工，准备去街上试着发传单。", scene="apartment_entrance_morning"),
+                story_line("流萤", "这些宣传其实还挺好玩的。", "happy", scene="apartment_entrance_morning"),
+                story_line("旁白", "你把海报递给她，决定先从商店街开始。", scene="apartment_entrance_morning"),
+            ] * 2,
+            "next_node_type": "free_input",
+            "choices": [],
+            "hidden_outcome": "neutral",
+            "axis_changes": {"familiarity": 0, "consistency": 0, "boundaries": 0, "authenticity": 0},
+            "add_flags": [],
+            "resolve_flags": [],
+            "user_summary": "用户和流萤一起准备宣传小任务。",
+            "event_summary": "两人决定去商店街分工宣传。",
+            "event_complete": False,
+        }
+        self.upstream.chat_response = {
+            "choices": [{"message": {"role": "assistant", "content": json.dumps(result, ensure_ascii=False)}}]
+        }
+
+        _updated, turn = self.gateway.continue_narrative_event(
+            NarrativeEventSession.start("small-task"), "一起做宣传"
+        )
+
+        self.assertEqual({line.scene for line in turn.lines}, {"shopping_street_day"})
+        self.assertEqual(turn.lines[1].sprite, "outdoor_happy_laugh")
 
     def test_context_prepends_one_system_message_when_none_exists(self) -> None:
         payload = {"model": "firefly-model", "messages": [{"role": "user", "content": "hi"}]}

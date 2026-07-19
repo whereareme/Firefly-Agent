@@ -38,6 +38,10 @@ def test_relationship_popup_appears_after_reply_and_dismiss_does_not_record() ->
         assert window._relationship_dialog is not None
         assert window._relationship_dialog.isModal() is False
         assert window._relationship_dialog.proposal == proposal
+        assert window._relationship_dialog.width() == 330
+        assert window._relationship_dialog.title_label.text() == "记录这段回忆？"
+        assert window._relationship_dialog.dismiss_button.text() == "忽略"
+        assert window._relationship_dialog.confirm_button.text() == "记录"
         window._relationship_dialog.dismiss_button.click()
         _process_until(lambda: window._relationship_dialog is None)
         window.close()
@@ -80,6 +84,7 @@ def test_relationship_popup_queues_multiple_candidates_without_overlap() -> None
         _process_until(lambda: window._relationship_dialog is not None)
         assert window._relationship_dialog is not None
         assert window._relationship_dialog.proposal == first
+        assert window._relationship_dialog.queue_label.text() == "待确认 2"
         assert window._relationship_queue == [second]
         window._relationship_dialog.dismiss_button.click()
         _process_until(

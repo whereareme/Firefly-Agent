@@ -24,6 +24,11 @@ MAX_CONTEXT_EVENTS = 8
 MAX_CONTEXT_SUMMARY_LENGTH = 120
 MAX_TIMESTAMP_LENGTH = 42
 MAX_STATE_FILE_BYTES = 192 * 1024
+MAX_STORY_FILE_BYTES = 48 * 1024
+STORY_EXPRESSIONS = frozenset((
+    "neutral", "happy", "shy", "worried", "relieved", "thoughtful", "serious",
+    "awkward", "hurt", "surprised", "sleepy", "moved",
+))
 
 _LOCK_REGISTRY_GUARD = threading.Lock()
 _LOCKS_BY_DATA_DIR: dict[str, threading.RLock] = {}
@@ -85,6 +90,147 @@ class PendingProposal:
             summary=_validate_summary(value["summary"]),
             created_at=_validate_timestamp(value["created_at"], "proposal timestamp"),
         )
+
+
+@dataclass(frozen=True)
+class StoryLine:
+    speaker: str
+    text: str
+    expression: str
+    scene: str | None = None
+    sprite: str | None = None
+
+    def to_dict(self) -> dict[str, str]:
+        result = {"speaker": self.speaker, "text": self.text, "expression": self.expression}
+        if self.scene is not None and self.sprite is not None:
+            result["scene"] = self.scene
+            result["sprite"] = self.sprite
+        return result
+
+    @classmethod
+    def from_dict(cls, value: object) -> "StoryLine":
+        legacy_keys = {"speaker", "text", "expression"}
+        visual_keys = legacy_keys | {"scene", "sprite"}
+        if not isinstance(value, dict) or set(value) not in (legacy_keys, visual_keys):
+            raise StateError("story line has unknown or missing fields")
+        assert isinstance(value, dict)
+        speaker = value["speaker"]
+        text = value["text"]
+        expression = value["expression"]
+        scene = value.get("scene")
+        sprite = value.get("sprite")
+        if not isinstance(speaker, str) or speaker not in {"旁白", "流萤"}:
+            raise StateError("story speaker is unknown")
+        if not isinstance(text, str) or not text.strip() or text != text.strip() or len(text) > 160:
+            raise StateError("story text must contain 1 to 160 trimmed characters")
+        if any(ord(character) < 32 or 127 <= ord(character) <= 159 for character in text):
+            raise StateError("story text contains control characters")
+        if not isinstance(expression, str) or expression not in STORY_EXPRESSIONS:
+            raise StateError("story expression is unknown")
+        if (scene is None) != (sprite is None):
+            raise StateError("story visual state is incomplete")
+        if scene is not None and (
+            not isinstance(scene, str)
+            or not isinstance(sprite, str)
+            or not scene
+            or not sprite
+            or len(scene) > 80
+            or len(sprite) > 80
+            or any(ord(character) < 32 for character in scene + sprite)
+        ):
+            raise StateError("story visual state is invalid")
+        return cls(speaker=speaker, text=text, expression=expression, scene=scene, sprite=sprite)
+
+
+@dataclass(frozen=True)
+class StoryContinuation:
+    choice: str
+    lines: tuple[StoryLine, ...]
+
+    @classmethod
+    def from_dict(cls, value: object) -> "StoryContinuation":
+        _require_exact_keys(value, {"choice", "lines"}, "story continuation")
+        assert isinstance(value, dict)
+        if value["choice"] not in {"near", "space"}:
+            raise StateError("story continuation choice is unknown")
+        return cls(
+            choice=value["choice"],
+            lines=_validate_story_lines(value["lines"], "story continuation", 3, 5),
+        )
+
+
+@dataclass(frozen=True)
+class StoryScript:
+    version: int
+    chapter_id: str
+    opening: tuple[StoryLine, ...]
+    near: tuple[StoryLine, ...]
+    space: tuple[StoryLine, ...]
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "version": self.version,
+            "chapter_id": self.chapter_id,
+            "opening": [line.to_dict() for line in self.opening],
+            "branches": {
+                "near": [line.to_dict() for line in self.near],
+                "space": [line.to_dict() for line in self.space],
+            },
+        }
+
+    @classmethod
+    def from_dict(cls, value: object) -> "StoryScript":
+        _require_exact_keys(value, {"version", "chapter_id", "opening", "branches"}, "story")
+        assert isinstance(value, dict)
+        if value["version"] != 1 or value["chapter_id"] != "acquainted-approach-1":
+            raise StateError("story version or chapter is unsupported")
+        branches = value["branches"]
+        _require_exact_keys(branches, {"near", "space"}, "story branches")
+        assert isinstance(branches, dict)
+        opening = _validate_story_lines(value["opening"], "opening", 6, 10)
+        near = _validate_story_lines(branches["near"], "near branch", 3, 5)
+        space = _validate_story_lines(branches["space"], "space branch", 3, 5)
+        return cls(version=1, chapter_id=value["chapter_id"], opening=opening, near=near, space=space)
+
+    def branch(self, choice: str) -> tuple[StoryLine, ...]:
+        if choice == "near":
+            return self.near
+        if choice == "space":
+            return self.space
+        raise StateError("story branch is unknown")
+
+
+def default_story_script() -> StoryScript:
+    """Return the fixed fallback used only when model generation fails."""
+    return StoryScript.from_dict(
+        {
+            "version": 1,
+            "chapter_id": "acquainted-approach-1",
+            "opening": [
+                {"speaker": "旁白", "text": "清晨的光越过窗帘，客厅里只剩下时钟轻微的走动声。", "expression": "neutral"},
+                {"speaker": "流萤", "text": "你醒了吗？我没有吵到你吧。", "expression": "worried"},
+                {"speaker": "旁白", "text": "她站在沙发旁，手指无意识地收紧，像是在确认自己是否越过了界线。", "expression": "worried"},
+                {"speaker": "流萤", "text": "最近和你说话的时候，我总会忘记时间。", "expression": "shy"},
+                {"speaker": "流萤", "text": "可我又担心，靠得太近会让你觉得有负担。", "expression": "worried"},
+                {"speaker": "旁白", "text": "她抬起眼睛，认真等着你的回答。", "expression": "worried"},
+                {"speaker": "流萤", "text": "如果我想在这里多待一会儿，你希望我怎么做？", "expression": "worried"},
+            ],
+            "branches": {
+                "near": [
+                    {"speaker": "旁白", "text": "你向旁边挪出位置，示意她坐近一些。", "expression": "neutral"},
+                    {"speaker": "流萤", "text": "真的可以吗？那我就……稍微靠近一点。", "expression": "shy"},
+                    {"speaker": "旁白", "text": "她的肩膀慢慢放松下来，晨光落在微微扬起的嘴角。", "expression": "happy"},
+                    {"speaker": "流萤", "text": "谢谢你告诉我答案。以后我也会认真听你的感受。", "expression": "happy"},
+                ],
+                "space": [
+                    {"speaker": "旁白", "text": "你没有立刻靠近，只告诉她不必为了陪伴勉强自己。", "expression": "neutral"},
+                    {"speaker": "流萤", "text": "原来保持一点距离，也不代表你希望我离开。", "expression": "relieved"},
+                    {"speaker": "旁白", "text": "她在另一侧坐下，安静却不再局促。", "expression": "relieved"},
+                    {"speaker": "流萤", "text": "我明白了。能这样待在同一个地方，也已经很好。", "expression": "happy"},
+                ],
+            },
+        }
+    )
 
 
 @dataclass(frozen=True)
@@ -179,10 +325,13 @@ class StateStore:
     def __init__(self, data_dir: str | Path) -> None:
         self._data_dir = Path(os.path.abspath(data_dir))
         self.path = self._data_dir / "relationship.json"
+        self.story_path = self._data_dir / "story.json"
         canonical_data_dir = str(self._data_dir.resolve(strict=False))
         with _LOCK_REGISTRY_GUARD:
             self._lock = _LOCKS_BY_DATA_DIR.setdefault(canonical_data_dir, threading.RLock())
         # ponytail: process-wide only; use a file lock or SQLite for multi-process writers.
+        self._assert_safe_paths()
+        self._remove_legacy_story()
 
     def load(self) -> RelationshipState:
         with self._lock:
@@ -252,6 +401,27 @@ class StateStore:
 
     def queue_memory(self, summary: str) -> RelationshipState:
         return self.queue_proposal("memory", summary)
+
+    def load_story(self) -> StoryScript | None:
+        return None
+
+    def save_story(self, value: object) -> StoryScript:
+        del value
+        raise StateError("legacy story scripts are disabled")
+
+    def _remove_legacy_story(self) -> None:
+        """Delete only the obsolete story.json entry without following links."""
+        try:
+            metadata = os.lstat(self.story_path)
+        except FileNotFoundError:
+            return
+        except OSError as error:
+            raise StateError(f"could not inspect legacy story state at {self.story_path}: {error}") from error
+        if stat.S_ISREG(metadata.st_mode) or stat.S_ISLNK(metadata.st_mode):
+            try:
+                self.story_path.unlink()
+            except OSError as error:
+                raise StateError(f"could not remove legacy story state at {self.story_path}: {error}") from error
 
     def queue_proposal(self, kind: str, summary: str) -> RelationshipState:
         kind = _validate_event_kind(kind)
@@ -357,6 +527,19 @@ class StateStore:
         except (OSError, StateError) as error:
             raise StateError(f"could not reset relationship state after preserving it at {backup_path}: {error}") from error
 
+    def _recover_corrupt_story(self) -> None:
+        self._assert_safe_file(self.story_path, "story")
+        backup_path = self.story_path.with_name(
+            f"{self.story_path.name}.corrupt-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S%fZ')}-{uuid4().hex}"
+        )
+        try:
+            os.replace(self.story_path, backup_path)
+        except FileNotFoundError:
+            return None
+        except OSError as error:
+            raise StateError(f"could not preserve corrupt story state at {self.story_path}: {error}") from error
+        return None
+
     def _ensure_safe_data_dir(self) -> None:
         self._assert_safe_paths()
         try:
@@ -391,12 +574,30 @@ class StateStore:
         if stat.S_ISLNK(metadata.st_mode):
             raise StateError("relationship state file must not be a symbolic link")
 
+    def _assert_safe_file(self, path: Path, label: str) -> None:
+        try:
+            metadata = os.lstat(path)
+        except FileNotFoundError:
+            return
+        except OSError as error:
+            raise StateError(f"could not inspect {label} state at {path}: {error}") from error
+        if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISREG(metadata.st_mode):
+            raise StateError(f"{label} state file must be a regular file")
+
 
 def _later_stage(first: str, second: str) -> str:
     try:
         return STAGES[max(STAGES.index(first), STAGES.index(second))]
     except ValueError as error:
         raise StateError("unknown relationship stage") from error
+
+
+def _validate_story_lines(
+    value: object, name: str, minimum: int, maximum: int
+) -> tuple[StoryLine, ...]:
+    if not isinstance(value, list) or not minimum <= len(value) <= maximum:
+        raise StateError(f"{name} must contain {minimum} to {maximum} lines")
+    return tuple(StoryLine.from_dict(line) for line in value)
 
 
 def _append_event(

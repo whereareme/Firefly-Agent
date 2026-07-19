@@ -53,6 +53,7 @@ def test_companion_imprint_status_controls_refresh_offscreen(tmp_path: Path) -> 
             assert label in window.companion_imprint_status_label.text()
             assert window.companion_imprint_stop_button.isEnabled() is running
             assert window.companion_imprint_save_button.isEnabled() is not running
+            assert window.companion_imprint_enable_button.isEnabled() is (status == "connected")
         window.companion_imprint_project_path_input.setText("C:/" + ("very-long-path/" * 40))
         window.refresh_companion_imprint_panel()
         assert window.companion_imprint_error_label.wordWrap()
@@ -78,7 +79,7 @@ def test_enabled_companion_imprint_starts_once_and_chat_close_keeps_it_running(t
         window.deleteLater()
 
 
-def test_managed_sidecar_keeps_the_confirmation_panel_and_tray_enabled() -> None:
+def test_managed_sidecar_starts_with_its_panel_available() -> None:
     source = (Path(__file__).resolve().parents[1] / "firefly" / "desktop" / "companion_imprint.py").read_text(
         encoding="utf-8"
     )
@@ -188,6 +189,7 @@ def test_desktop_app_shutdowns_companion_imprint_on_application_quit(tmp_path: P
     monkeypatch.setattr(desktop_app, "LocalServer", Server)
     monkeypatch.setattr(desktop_app, "initialize_workspace", lambda _workspace: tmp_path)
     monkeypatch.setattr(desktop_app, "configure_desktop_runtime", lambda: None)
+    monkeypatch.setattr(desktop_app, "acquire_desktop_lock", lambda: object())
     monkeypatch.setattr(chat_window_module, "ChatWindow", Chat)
     monkeypatch.setattr(pet_window_module, "PetWindow", Pet)
     monkeypatch.setattr(runtime_module, "FireflyRuntime", lambda **_kwargs: object())

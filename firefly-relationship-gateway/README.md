@@ -53,6 +53,21 @@ Manual gift and anniversary fields remain as a secondary fallback. Closing the
 window hides it to the system tray without interrupting the gateway; use the
 tray menu's `退出` action to stop the Sidecar.
 
+When no Galgame event has been prepared yet, the next normal Firefly chat asks
+the configured model to generate one bounded private script from that daily
+conversation and confirmed memories. The hidden script marker is removed before
+the reply reaches Firefly, and only the validated script is saved locally in
+`story.json`; the API key and original chat are not persisted. The story plays
+line by line in a separate window. Its two fixed choices appear only at the
+branch point and lead to distinct generated dialogue.
+
+At a branch, the user may also type a free-form reply. The Sidecar keeps only
+the latest model id and credential headers in process memory, asks the current
+provider to classify that reply into one of the two fixed branches on a worker
+thread, and never writes the credential or custom reply to disk. Fixed choices
+remain available when classification fails. Character composites are cached,
+and the dialogue area grows only as needed for the current line.
+
 The gateway replaces the client's `Accept-Encoding` with `identity` upstream,
 so it can filter both JSON and SSE responses. A successful chat response with
 unsupported compression, malformed content, or an unsupported format fails

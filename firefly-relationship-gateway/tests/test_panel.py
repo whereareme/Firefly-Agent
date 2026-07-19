@@ -1,6 +1,7 @@
 import tempfile
 import threading
 import unittest
+from dataclasses import replace
 from pathlib import Path
 from queue import SimpleQueue
 from unittest.mock import patch
@@ -9,6 +10,7 @@ import relationship_gateway.__main__ as command
 from relationship_gateway.config import Config
 from relationship_gateway.panel import (
     ASSET_PATH,
+    GALGAME_MANIFEST_PATH,
     WINDOW_ICON_PATH,
     EVENT_BUTTON_COLUMN,
     EVENT_ENTRY_COLUMN,
@@ -18,17 +20,36 @@ from relationship_gateway.panel import (
     PanelAction,
     TrayController,
     confirm_memory,
+    compose_story_stage,
+    completed_chapter_stories,
     dismiss_memory,
     gateway_diagnostic,
+    galgame_asset_path,
+    narrative_event_definition,
+    next_narrative_event_id,
+    preferred_user_title,
     relationship_theme,
     record_explicit_event,
     RelationshipPanel,
     stage_icon,
+    story_dialogue_height,
 )
-from relationship_gateway.state import STAGES, StateStore
+from relationship_gateway.narrative import (
+    CHAPTER_ONE_FINALE_ID,
+    CHAPTERS,
+    NarrativeEventResult,
+    NarrativeEventSession,
+    NarrativeProgress,
+    apply_event_result,
+)
+from relationship_gateway.state import STAGES, StateStore, StoryLine
 
 
 class PanelActionTests(unittest.TestCase):
+    def test_preferred_user_title_uses_explicit_memory_then_default(self) -> None:
+        self.assertEqual(preferred_user_title(""), "开拓者")
+        self.assertEqual(preferred_user_title("长期记忆：流萤称呼我为「星光」"), "星光")
+
     def setUp(self) -> None:
         self.temporary_directory = tempfile.TemporaryDirectory()
         self.store = StateStore(Path(self.temporary_directory.name) / "data")
@@ -151,20 +172,36 @@ class PanelActionTests(unittest.TestCase):
         self.assertEqual(gateway.shutdown_called, 1)
         self.assertEqual(tray.stopped, 1)
 
-    def test_tray_fallback_keeps_window_open(self) -> None:
-        root = type("Root", (), {"withdrawn": False})()
+    def test_tray_fallback_minimizes_to_taskbar(self) -> None:
+        root = type("Root", (), {"withdrawn": False, "iconified": False})()
         root.withdraw = lambda: setattr(root, "withdrawn", True)
+        root.iconify = lambda: setattr(root, "iconified", True)
         action = type("Text", (), {"value": ""})()
         action.set = lambda value: setattr(action, "value", value)
         panel = RelationshipPanel.__new__(RelationshipPanel)
         panel.root = root
         panel._tray = None
         panel._action_text = action
+        panel._start_tray = lambda: None
 
         panel.hide()
 
         self.assertFalse(root.withdrawn)
-        self.assertIn("托盘不可用", action.value)
+        self.assertTrue(root.iconified)
+        self.assertIn("任务栏", action.value)
+
+    def test_hide_retries_tray_start_before_falling_back(self) -> None:
+        root = type("Root", (), {"withdrawn": False})()
+        root.withdraw = lambda: setattr(root, "withdrawn", True)
+        panel = RelationshipPanel.__new__(RelationshipPanel)
+        panel.root = root
+        panel._tray = None
+        panel._action_text = type("Text", (), {"set": lambda self, value: None})()
+        panel._start_tray = lambda: setattr(panel, "_tray", object())
+
+        panel.hide()
+
+        self.assertTrue(root.withdrawn)
 
     def test_tray_worker_only_enqueues_until_tk_main_thread_drains(self) -> None:
         root = type("Root", (), {"shown": [], "scheduled": []})()
@@ -209,6 +246,353 @@ class PanelActionTests(unittest.TestCase):
             {"memory": "重要回忆", "gift": "礼物", "anniversary": "纪念日"},
         )
 
+    def test_galgame_runtime_assets_use_the_chapter_one_pack(self) -> None:
+        self.assertTrue(GALGAME_MANIFEST_PATH.is_file())
+        assets = [
+            galgame_asset_path("scenes", "apartment_morning"),
+            galgame_asset_path("scenes", "riverside_cloudy"),
+            galgame_asset_path("scenes", "cafe_afternoon"),
+            galgame_asset_path("scenes", "outdoor_long_bench_evening"),
+            galgame_asset_path("sprites", "home_neutral_stand"),
+            galgame_asset_path("sprites", "outdoor_surprised_turn"),
+            galgame_asset_path("sprites", "night_seated_smile"),
+        ]
+
+        from PIL import Image
+
+        for asset in assets:
+            self.assertIn("chapter-01", asset.parts)
+            with Image.open(asset) as image:
+                image.verify()
+
+        scene = Image.open(galgame_asset_path("scenes", "outdoor_long_bench_evening")).convert("RGB")
+        sprite = Image.open(galgame_asset_path("sprites", "night_seated_smile")).convert("RGBA")
+        self.assertEqual(compose_story_stage(scene, sprite).size, (528, 330))
+        self.assertEqual(compose_story_stage(scene, sprite, (960, 600)).size, (960, 600))
+
+    def test_closing_story_window_restores_the_management_panel(self) -> None:
+        window = type("Window", (), {"destroyed": False})()
+        window.destroy = lambda: setattr(window, "destroyed", True)
+        panel = RelationshipPanel.__new__(RelationshipPanel)
+        panel._story_window = window
+        panel._story_canvas = object()
+        panel._story_resize_job = None
+        panel._exiting = False
+        panel.show = lambda: setattr(panel, "shown", True)
+        panel.shown = False
+
+        panel.close_story_window()
+
+        self.assertTrue(window.destroyed)
+        self.assertTrue(panel.shown)
+        self.assertIsNone(panel._story_window)
+        self.assertIsNone(panel._story_canvas)
+
+    def test_story_waits_for_another_reply_after_each_generated_turn(self) -> None:
+        panel = RelationshipPanel.__new__(RelationshipPanel)
+        panel._story_lines = (StoryLine("流萤", "我在听。", "neutral"),)
+        panel._story_index = 0
+        panel._story_waiting_choice = False
+        panel._story_judging = False
+        panel._narrative_session = NarrativeEventSession.start("first-greeting")
+        panel._render_story_window = lambda: None
+        panel.close_story_window = lambda: None
+
+        panel.advance_story()
+
+        self.assertTrue(panel._story_waiting_choice)
+
+    def test_first_click_finishes_typewriter_without_advancing(self) -> None:
+        panel = RelationshipPanel.__new__(RelationshipPanel)
+        panel._story_lines = (StoryLine("流萤", "慢慢出现的文字。", "neutral"),)
+        panel._story_index = 0
+        panel._story_reveal_chars = 2
+        panel._story_choice_error = None
+        panel._story_judging = False
+        panel._story_waiting_choice = False
+        panel._story_text_job = None
+        panel._narrative_session = NarrativeEventSession.start("first-greeting")
+        panel._render_story_window = lambda: None
+
+        panel.advance_story()
+
+        self.assertEqual(panel._story_index, 0)
+        self.assertEqual(panel._story_reveal_chars, len(panel._story_lines[0].text))
+
+    def test_skip_stays_off_for_unread_text_and_enables_during_replay(self) -> None:
+        panel = RelationshipPanel.__new__(RelationshipPanel)
+        panel._story_lines = (StoryLine("流萤", "还没有读过。", "neutral"),)
+        panel._story_index = 0
+        panel._story_skip = False
+        panel._story_replay = False
+        panel._playback_store = type("ReadStore", (), {"is_read": lambda self, line: False})()
+        panel._reset_story_display = lambda: None
+        panel._render_story_window = lambda: None
+
+        panel.toggle_story_skip()
+        self.assertFalse(panel._story_skip)
+        panel._story_replay = True
+        panel.toggle_story_skip()
+        self.assertTrue(panel._story_skip)
+
+    def test_generated_narrative_turn_becomes_the_next_playable_lines(self) -> None:
+        lines = (
+            StoryLine("旁白", "她停下来听你说完。", "neutral"),
+            StoryLine("流萤", "原来是这样。", "relieved"),
+            StoryLine("流萤", "那我们慢慢来。", "happy"),
+        )
+        session = NarrativeEventSession.start("first-greeting")
+        window = type("Window", (), {"winfo_exists": lambda self: True})()
+        panel = RelationshipPanel.__new__(RelationshipPanel)
+        panel._story_window = window
+        panel._story_waiting_choice = True
+        panel._story_judging = True
+        panel._story_custom_text = type("Text", (), {"set": lambda self, value: None})()
+        panel._render_story_window = lambda: None
+
+        panel._finish_story_continuation((session, lines), None)
+
+        self.assertIs(panel._narrative_session, session)
+        self.assertEqual(panel._story_lines, lines)
+        self.assertEqual(panel._story_index, 0)
+        self.assertFalse(panel._story_waiting_choice)
+
+    def test_story_dialogue_height_tracks_text_without_taking_over_the_scene(self) -> None:
+        short = story_dialogue_height("一句短对白。", 960)
+        long = story_dialogue_height("这是一段更长的对白。" * 24, 960)
+
+        self.assertEqual(short, 112)
+        self.assertGreater(long, short)
+        self.assertLessEqual(long, 180)
+
+    def test_center_choice_hit_area_selects_only_the_clicked_branch(self) -> None:
+        panel = RelationshipPanel.__new__(RelationshipPanel)
+        panel._story_waiting_choice = True
+        panel._story_judging = False
+        panel._narrative_session = NarrativeEventSession.start("first-greeting")
+        panel._story_choice_bounds = {
+            "near": (100, 100, 500, 150),
+            "space": (100, 170, 500, 220),
+        }
+        selected: list[str] = []
+        panel._begin_story_continuation = (
+            lambda text: selected.append(text) or "break"
+        )
+        event = type("Event", (), {"x": 300, "y": 190})()
+
+        panel._handle_story_click(event)
+
+        self.assertEqual(selected, ["space"])
+
+    def test_completed_story_ignores_stale_choice_overlay_and_closes(self) -> None:
+        panel = RelationshipPanel.__new__(RelationshipPanel)
+        panel._story_lines = (StoryLine("流萤", "这一幕结束了。", "neutral"),)
+        panel._story_index = 0
+        panel._story_waiting_choice = True
+        panel._story_judging = False
+        panel._narrative_session = type("Session", (), {"completed": True})()
+        closed: list[bool] = []
+        panel.close_story_window = lambda: closed.append(True)
+
+        result = panel.advance_story()
+
+        self.assertEqual(result, "break")
+        self.assertEqual(closed, [True])
+        self.assertFalse(panel._story_accepts_choice())
+
+    def test_panel_recovers_completed_story_result_missed_by_the_window(self) -> None:
+        old_line = StoryLine("流萤", "下次再见。", "neutral")
+        final_line = StoryLine("流萤", "今天能认识你，我很开心。", "happy")
+        current = type("Session", (), {"event_id": "first-greeting", "completed": False, "lines": (old_line,)})()
+        saved = type(
+            "Session",
+            (),
+            {"event_id": "first-greeting", "completed": True, "lines": (old_line, final_line)},
+        )()
+        window = type("Window", (), {"winfo_exists": lambda self: True})()
+        panel = RelationshipPanel.__new__(RelationshipPanel)
+        panel._narrative_session = current
+        panel._story_window = window
+        panel._story_lines = (old_line,)
+        panel._story_index = 0
+        panel._story_waiting_choice = True
+        panel._story_judging = True
+        panel._story_choice_error = "旧状态"
+        rendered: list[bool] = []
+        panel._render_story_window = lambda: rendered.append(True)
+
+        panel._sync_completed_story_session(saved)
+
+        self.assertIs(panel._narrative_session, saved)
+        self.assertEqual(panel._story_lines, (final_line,))
+        self.assertFalse(panel._story_waiting_choice)
+        self.assertFalse(panel._story_judging)
+        self.assertIsNone(panel._story_choice_error)
+        self.assertEqual(rendered, [True])
+
+    def test_management_refresh_keeps_the_live_story_session(self) -> None:
+        active = NarrativeEventSession.start("first-greeting")
+        overview = NarrativeEventSession.start("conversation-rhythm")
+        progress = NarrativeProgress.default()
+        event = narrative_event_definition("conversation-rhythm")
+        window = type("Window", (), {"winfo_exists": lambda self: True})()
+        panel = RelationshipPanel.__new__(RelationshipPanel)
+        panel._story_window = window
+        panel._narrative_session = active
+        panel._narrative_event = narrative_event_definition("first-greeting")
+
+        panel._adopt_narrative_overview_state(progress, overview, event)
+
+        self.assertIs(panel._narrative_progress, progress)
+        self.assertIs(panel._narrative_session, active)
+        self.assertEqual(panel._narrative_event.id, "first-greeting")
+
+    def test_management_refresh_adopts_session_after_story_window_closes(self) -> None:
+        active = NarrativeEventSession.start("first-greeting")
+        overview = NarrativeEventSession.start("conversation-rhythm")
+        progress = NarrativeProgress.default()
+        event = narrative_event_definition("conversation-rhythm")
+        panel = RelationshipPanel.__new__(RelationshipPanel)
+        panel._story_window = None
+        panel._narrative_session = active
+        panel._narrative_event = narrative_event_definition("first-greeting")
+
+        panel._adopt_narrative_overview_state(progress, overview, event)
+
+        self.assertIs(panel._narrative_progress, progress)
+        self.assertIs(panel._narrative_session, overview)
+        self.assertIs(panel._narrative_event, event)
+
+    def test_completed_chapter_stories_exposes_only_replayable_events(self) -> None:
+        completed = replace(NarrativeEventSession.start("first-greeting"), completed=True)
+        active = NarrativeEventSession.start("conversation-rhythm")
+
+        self.assertEqual(completed_chapter_stories((completed, active), completed.chapter_id), (completed,))
+
+    def test_first_chapter_scheduler_resumes_then_advances_core_events_in_order(self) -> None:
+        progress = NarrativeProgress.default()
+        session = NarrativeEventSession.start("first-greeting")
+        self.assertEqual(next_narrative_event_id(progress, session), "first-greeting")
+
+        progress = apply_event_result(
+            progress, "first-greeting", "2026-07-14", NarrativeEventResult("neutral")
+        )
+        self.assertEqual(next_narrative_event_id(progress, session), "conversation-rhythm")
+        self.assertEqual(narrative_event_definition("conversation-rhythm").title, "你习惯怎样聊天")
+
+    def test_first_chapter_scheduler_uses_hidden_bridge_or_repair_events(self) -> None:
+        progress = NarrativeProgress.default()
+        for index, event_id in enumerate(CHAPTERS[0].required_event_ids):
+            progress = apply_event_result(
+                progress, event_id, f"2026-07-{index + 1:02d}", NarrativeEventResult("neutral")
+            )
+
+        event_id = next_narrative_event_id(progress, None)
+
+        self.assertIsNotNone(event_id)
+        self.assertTrue(event_id.startswith("llm-repair-"))  # type: ignore[union-attr]
+        self.assertNotIn("bad", narrative_event_definition(event_id).title)  # type: ignore[arg-type]
+
+    def test_first_chapter_scheduler_reports_finale_only_after_all_gates_pass(self) -> None:
+        progress = NarrativeProgress.default()
+        for index, event_id in enumerate(CHAPTERS[0].required_event_ids):
+            progress = apply_event_result(
+                progress,
+                event_id,
+                f"2026-07-{index + 1:02d}",
+                NarrativeEventResult(
+                    "good", familiarity=2, consistency=1, boundaries=1, authenticity=1
+                ),
+            )
+
+        self.assertEqual(next_narrative_event_id(progress, None), CHAPTER_ONE_FINALE_ID)
+
+    def test_personalized_interludes_run_only_at_their_slots_with_memory_context(self) -> None:
+        progress = NarrativeProgress.default()
+        for index, event_id in enumerate(CHAPTERS[0].required_event_ids[:3]):
+            progress = apply_event_result(
+                progress, event_id, f"2026-07-{index + 1:02d}", NarrativeEventResult("neutral")
+            )
+        self.assertEqual(
+            next_narrative_event_id(progress, None, True), "personalized-interlude-1"
+        )
+        self.assertEqual(next_narrative_event_id(progress, None, False), "remembered-detail")
+
+    def test_panel_uses_only_everos_memory_context_for_personalized_interludes(self) -> None:
+        panel = RelationshipPanel.__new__(RelationshipPanel)
+        panel.gateway = type(
+            "Gateway", (), {"memory_context_snapshot": lambda self: "## EverOS 记忆\n- 用户正在准备考试"}
+        )()
+        panel.store = type(
+            "Store", (), {"load": lambda self: type("State", (), {"context_events": (type("Event", (), {"kind": "memory", "summary": "confirmed-only"})(),)})()}
+        )()
+
+        self.assertEqual(
+            panel._memory_narrative_context(),
+            "## EverOS 记忆\n- 用户正在准备考试",
+        )
+
+    def test_custom_story_reply_uses_the_same_narrative_continuation_path(self) -> None:
+        panel = RelationshipPanel.__new__(RelationshipPanel)
+        panel._story_waiting_choice = True
+        panel._story_judging = False
+        panel._narrative_session = NarrativeEventSession.start("first-greeting")
+        panel._story_custom_text = type("Text", (), {"get": lambda self: "我想先听你说"})()
+        submitted: list[str] = []
+        panel._begin_story_continuation = lambda text: submitted.append(text) or "break"
+
+        panel.submit_custom_story_choice()
+
+        self.assertEqual(submitted, ["我想先听你说"])
+
+    def test_panel_recovers_completed_session_before_scheduling_the_next_event(self) -> None:
+        pending = NarrativeProgress.default()
+        recovered = apply_event_result(
+            pending, "first-greeting", "2026-07-14", NarrativeEventResult("neutral")
+        )
+        progress_values = iter((pending, recovered))
+        completed_session = type(
+            "CompletedSession", (), {"completed": True, "event_id": "first-greeting"}
+        )()
+        gateway = type("Gateway", (), {})()
+        gateway.narrative_store = type("Store", (), {"load": lambda self: next(progress_values)})()
+        gateway.narrative_session_store = type(
+            "SessionStore", (), {"load": lambda self: completed_session}
+        )()
+        calls: list[str] = []
+        gateway.continue_narrative_event = (
+            lambda session, reply: calls.append(reply) or (session, None)
+        )
+        panel = RelationshipPanel.__new__(RelationshipPanel)
+        panel.gateway = gateway
+
+        progress, session = panel._load_narrative_state()
+
+        self.assertEqual(calls, ["恢复已完成的剧情进度"])
+        self.assertIsNone(session)
+        self.assertIn("first-greeting", progress.completed_event_ids)
+
+    def test_panel_hides_completed_session_that_is_already_recorded(self) -> None:
+        progress = apply_event_result(
+            NarrativeProgress.default(), "first-greeting", "2026-07-14", NarrativeEventResult("neutral")
+        )
+        completed_session = type(
+            "CompletedSession", (), {"completed": True, "event_id": "first-greeting"}
+        )()
+        gateway = type("Gateway", (), {})()
+        gateway.narrative_store = type("Store", (), {"load": lambda self: progress})()
+        gateway.narrative_session_store = type(
+            "SessionStore", (), {"load": lambda self: completed_session}
+        )()
+        gateway.continue_narrative_event = lambda *_args: (_ for _ in ()).throw(AssertionError("must not recover"))
+        panel = RelationshipPanel.__new__(RelationshipPanel)
+        panel.gateway = gateway
+
+        loaded_progress, session = panel._load_narrative_state()
+
+        self.assertIs(loaded_progress, progress)
+        self.assertIsNone(session)
+
     def test_all_relationship_stages_have_distinct_complete_themes(self) -> None:
         self.assertEqual(tuple(RELATIONSHIP_THEMES), STAGES)
         self.assertEqual(
@@ -249,7 +633,7 @@ class PanelActionTests(unittest.TestCase):
             self.assertIs(stage_icon(f"unknown-{index}"), icons[0])
         self.assertTrue(all(stage_icon(stage) is icon for stage, icon in zip(STAGES, icons)))
 
-    def test_stage_theme_switches_once_per_stage_and_falls_back(self) -> None:
+    def test_stage_label_changes_without_recoloring_the_fixed_theme(self) -> None:
         root = object()
         canvas = type("Canvas", (), {"colors": []})()
         canvas.configure = lambda **kwargs: canvas.colors.append(kwargs["background"])
@@ -273,7 +657,7 @@ class PanelActionTests(unittest.TestCase):
             panel._apply_stage_theme("unknown")
 
         self.assertEqual(configure.call_count, 2)
-        self.assertEqual(tray.stages, ["trusted", "acquainted"])
+        self.assertEqual(tray.stages, ["acquainted"])
         self.assertEqual(stage_text.values, [
             "关系阶段：信赖 · 确认值得留下的共同片段",
             "关系阶段：初识 · 确认值得留下的共同片段",
@@ -307,7 +691,7 @@ class PanelActionTests(unittest.TestCase):
 
         self.assertEqual(configure.call_count, 1)
         self.assertEqual(tray.calls, 2)
-        self.assertEqual(panel._icon_stage, "close")
+        self.assertEqual(panel._icon_stage, "acquainted")
 
     def test_tray_stage_update_recolors_existing_icon_without_restarting(self) -> None:
         tray = TrayController(lambda callback: None, lambda: None, lambda: None)

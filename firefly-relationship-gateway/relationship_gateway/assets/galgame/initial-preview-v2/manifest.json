@@ -1,0 +1,26 @@
+{
+  "id": "initial-preview-v2",
+  "sources": {
+    "scene_atlas": "source/complete-scenes-atlas.png",
+    "expression_atlas": "source/complete-expressions-atlas.png",
+    "climax_cg": "source/complete-climax-cg.png"
+  },
+  "character": {
+    "expressions": {
+      "neutral": "characters/expressions/neutral.png",
+      "happy": "characters/expressions/happy.png",
+      "shy": "characters/expressions/shy.png",
+      "worried": "characters/expressions/worried.png",
+      "relieved": "characters/expressions/relieved.png"
+    }
+  },
+  "scenes": {
+    "apartment_morning": "scenes/apartment-morning.png",
+    "riverside_evening": "scenes/riverside-evening.png",
+    "cafe_afternoon": "scenes/cafe-afternoon.png",
+    "neighborhood_sunset": "scenes/neighborhood-sunset.png"
+  },
+  "cg": {
+    "chapter_climax_sunset": "cg/chapter-climax-sunset.png"
+  }
+}

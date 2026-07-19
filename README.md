@@ -8,7 +8,7 @@ This is an unofficial fan-made project, not an official HoYoverse application or
 
 中文说明：[README.zh-CN.md](README.zh-CN.md)
 
-Latest update report: [UPDATE_REPORT_2026-07-13.md](docs/UPDATE_REPORT_2026-07-13.md). It covers the six default sticker emotions, the Companion Imprint Sidecar, privacy notes, and test results.
+Latest update report (through 2026-07-19): [UPDATE_REPORT_2026-07-13.md](docs/UPDATE_REPORT_2026-07-13.md). It covers the six default sticker emotions, the Companion Imprint Sidecar, the first-chapter Galgame flow, privacy notes, and test results.
 
 ## What It Does
 
@@ -21,6 +21,7 @@ Latest update report: [UPDATE_REPORT_2026-07-13.md](docs/UPDATE_REPORT_2026-07-1
 - Optional Windows desktop awareness and simple computer controls
 - Six default low-frequency Firefly sticker emotions: happy, shy, surprised, worried, sleepy, and speechless
 - Optional local Companion Imprint Sidecar for relationship context and user-confirmed events
+- Optional first-chapter Firefly Galgame flow with generated dialogue, choices, and bundled visual/audio assets
 - Local workspace and session storage
 
 The project is built on [OpenHarness](https://github.com/HKUDS/OpenHarness), which provides the underlying Agent loop, tools, skills, memory, providers, permissions, and multi-agent infrastructure.

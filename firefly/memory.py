@@ -53,6 +53,13 @@ class EverOSMemoryClient:
         return self.config.enabled
 
     def search_context(self, query: str) -> str:
+        context = self.search_everos_context(query)
+        if context:
+            return context
+        return self.local_store.search_context(query, self.config.top_k) if self.config.local_fallback_enabled else ""
+
+    def search_everos_context(self, query: str) -> str:
+        """Search EverOS only; narrative memory must never use local fallbacks."""
         if not self.enabled or not query.strip():
             return ""
         try:
@@ -70,7 +77,7 @@ class EverOSMemoryClient:
                     return context
             except Exception as error:
                 self.last_status = f"search failed: {type(error).__name__}"
-        return self.local_store.search_context(query, self.config.top_k) if self.config.local_fallback_enabled else ""
+        return ""
 
     def search(self, query: str, method: str) -> dict[str, Any]:
         return self._post(
@@ -216,6 +223,13 @@ def build_memory_context(prompt: str, history: list[dict[str, str]] | None, conf
     if channel_enabled(config, "openharness_session_memory_enabled"):
         return session_memory_context(config, workspace, cwd)
     return openharness_memdir_context(prompt, config, workspace, cwd)
+
+
+def build_everos_memory_context(prompt: str, config: dict[str, object], workspace: Path) -> str:
+    """Return only a live EverOS retrieval for the Sidecar narrative."""
+    if not config_enabled(config, "memory_enabled", False) or not channel_enabled(config, "everos_memory_enabled"):
+        return ""
+    return create_everos_client(config, workspace).search_everos_context(prompt)
 
 
 def remember_turn(prompt: str, reply: str, config: dict[str, object], workspace: Path, cwd: str | Path | None = None) -> None:

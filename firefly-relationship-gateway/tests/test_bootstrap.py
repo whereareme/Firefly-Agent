@@ -34,6 +34,17 @@ class BootstrapTests(unittest.TestCase):
     def tearDown(self) -> None:
         self.temporary_directory.cleanup()
 
+    def test_startup_removes_and_disables_legacy_story_file(self) -> None:
+        self.store.story_path.parent.mkdir(parents=True, exist_ok=True)
+        self.store.story_path.write_text("legacy story", encoding="utf-8")
+
+        restarted = StateStore(self.store.story_path.parent)
+
+        self.assertFalse(restarted.story_path.exists())
+        self.assertIsNone(restarted.load_story())
+        with self.assertRaisesRegex(StateError, "disabled"):
+            restarted.save_story({})
+
     def write_config(self, **overrides: object) -> Path:
         config_path = self.root / "config.json"
         config = {

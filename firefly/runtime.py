@@ -32,11 +32,12 @@ from firefly.context import (
     permission_mode_value,
 )
 from firefly.companion_imprint import (
+    enqueue_companion_imprint_memory_context,
     fetch_companion_imprint_context,
     strip_companion_imprint_markers,
 )
 from firefly.desktop_tools import firefly_desktop_tools
-from firefly.memory import build_memory_context, remember_turn
+from firefly.memory import build_everos_memory_context, build_memory_context, remember_turn
 from firefly.prompts import build_firefly_system_prompt
 from firefly.session_storage import FireflySessionBackend, NullSessionBackend
 from firefly.stickers import sticker_path, sticker_prompt, sticker_reply_instruction
@@ -470,6 +471,8 @@ async def run_firefly_prompt(
     workspace_config = load_config(workspace_root)
     companion_context = await asyncio.to_thread(fetch_companion_imprint_context, workspace_config)
     memory_context = build_memory_context(prompt, history, workspace_config, workspace_root, cwd_path) if use_memory_context else ""
+    everos_context = build_everos_memory_context(prompt, workspace_config, workspace_root) if use_memory_context else ""
+    enqueue_companion_imprint_memory_context(workspace_config, everos_context)
     openharness_context = await build_openharness_context(prompt, workspace_config, workspace_root, cwd_path)
     upload_context = build_upload_context(attachments)
     sticker_context = sticker_reply_instruction() if bool(workspace_config.get("sticker_interaction_enabled", True)) else ""
@@ -633,6 +636,16 @@ class FireflyRuntime:
             self.model = model
             self.provider_profile = provider_profile
             self.max_turns = max_turns
+
+    def fork(self) -> "FireflyRuntime":
+        with self._chat_lock:
+            return FireflyRuntime(
+                cwd=self.cwd,
+                workspace=self.workspace,
+                model=self.model,
+                provider_profile=self.provider_profile,
+                max_turns=self.max_turns,
+            )
 
     def chat(
         self,

@@ -1,5 +1,6 @@
 config.json
 data/
+WORKLOG.md
 __pycache__/
 relationship_gateway/__pycache__/
 tests/__pycache__/

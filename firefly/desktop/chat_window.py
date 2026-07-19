@@ -7,7 +7,7 @@ import re
 import tempfile
 import threading
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -149,6 +149,30 @@ def format_message_time(value: object) -> str:
         return datetime.fromisoformat(str(value)).strftime("%H:%M")
     except ValueError:
         return ""
+
+
+def should_show_message_time(previous: object, current: object) -> bool:
+    try:
+        current_time = datetime.fromisoformat(str(current))
+    except ValueError:
+        return False
+    try:
+        previous_time = datetime.fromisoformat(str(previous))
+    except ValueError:
+        return True
+    elapsed = current_time.timestamp() - previous_time.timestamp()
+    return elapsed < 0 or elapsed >= timedelta(minutes=5).total_seconds()
+
+
+def last_shown_message_time(messages: list[dict[str, Any]]) -> str:
+    last_shown = ""
+    for message in messages:
+        if message.get("role") not in {"user", "assistant"}:
+            continue
+        timestamp = str(message.get("timestamp") or "")
+        if should_show_message_time(last_shown, timestamp):
+            last_shown = timestamp
+    return last_shown
 
 
 def conversation_activity_time(conversation: dict[str, Any]) -> str:
@@ -295,51 +319,93 @@ class ModelSelector(QComboBox):
 class RelationshipImprintDialog(QDialog):
     """Non-modal confirmation surface for one relationship event."""
 
-    def __init__(self, proposal: dict[str, str], parent: QWidget) -> None:
+    def __init__(self, proposal: dict[str, str], parent: QWidget, pending_count: int = 1) -> None:
         super().__init__(parent)
         self.proposal = dict(proposal)
         self.setObjectName("relationshipImprintDialog")
         self.setWindowTitle("同行印记")
+        self.setWindowFlags(Qt.Tool | Qt.FramelessWindowHint)
         self.setModal(False)
         self.setAttribute(Qt.WA_DeleteOnClose)
-        self.setMinimumWidth(420)
-        self.setMaximumWidth(520)
+        self.setAttribute(Qt.WA_TranslucentBackground)
+        self.setFixedWidth(330)
         self._saving = False
 
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(22, 20, 22, 18)
-        layout.setSpacing(12)
-        title = QLabel("要把这一刻记下来吗？", self)
-        title.setObjectName("relationshipDialogTitle")
-        event_type = QLabel(RELATIONSHIP_EVENT_LABELS.get(proposal.get("kind", ""), "同行印记"), self)
+        outer_layout = QVBoxLayout(self)
+        outer_layout.setContentsMargins(0, 0, 0, 0)
+        card = QFrame(self)
+        card.setObjectName("relationshipImprintCard")
+        outer_layout.addWidget(card)
+
+        layout = QVBoxLayout(card)
+        layout.setContentsMargins(13, 12, 13, 12)
+        layout.setSpacing(8)
+
+        header = QHBoxLayout()
+        header.setSpacing(8)
+        avatar = QLabel(card)
+        avatar.setObjectName("relationshipDialogAvatar")
+        avatar.setFixedSize(30, 30)
+        avatar.setAlignment(Qt.AlignCenter)
+        pixmap = QPixmap(str(UI_ASSET_ROOT / "firefly_avatar.png"))
+        if not pixmap.isNull():
+            avatar.setPixmap(pixmap.scaled(30, 30, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+        header.addWidget(avatar)
+
+        title_box = QWidget(card)
+        title_layout = QVBoxLayout(title_box)
+        title_layout.setContentsMargins(0, 0, 0, 0)
+        title_layout.setSpacing(0)
+        caption = QLabel("同行印记", title_box)
+        caption.setObjectName("relationshipDialogCaption")
+        self.title_label = QLabel("记录这段回忆？", title_box)
+        self.title_label.setObjectName("relationshipDialogTitle")
+        title_layout.addWidget(caption)
+        title_layout.addWidget(self.title_label)
+        header.addWidget(title_box, 1)
+        self.queue_label = QLabel(f"待确认 {max(1, pending_count)}", card)
+        self.queue_label.setObjectName("relationshipDialogQueue")
+        header.addWidget(self.queue_label, 0, Qt.AlignTop)
+        layout.addLayout(header)
+
+        event_type = QLabel(RELATIONSHIP_EVENT_LABELS.get(proposal.get("kind", ""), "同行印记"), card)
         event_type.setObjectName("relationshipDialogType")
-        summary = QLabel(proposal.get("summary", ""), self)
-        summary.setObjectName("relationshipDialogSummary")
-        summary.setWordWrap(True)
-        self.error_label = QLabel("", self)
+        self.summary_label = QLabel(proposal.get("summary", ""), card)
+        self.summary_label.setObjectName("relationshipDialogSummary")
+        self.summary_label.setWordWrap(True)
+        self.error_label = QLabel("", card)
         self.error_label.setObjectName("relationshipDialogError")
         self.error_label.setWordWrap(True)
         self.error_label.hide()
-        layout.addWidget(title)
         layout.addWidget(event_type, 0, Qt.AlignLeft)
-        layout.addWidget(summary)
+        layout.addWidget(self.summary_label)
         layout.addWidget(self.error_label)
 
         actions = QHBoxLayout()
-        actions.setContentsMargins(0, 4, 0, 0)
+        actions.setContentsMargins(0, 2, 0, 0)
+        actions.setSpacing(6)
         actions.addStretch(1)
-        self.dismiss_button = QPushButton("暂不", self)
+        self.dismiss_button = QPushButton("忽略", card)
         self.dismiss_button.setObjectName("secondaryButton")
-        self.confirm_button = QPushButton("记下", self)
+        self.confirm_button = QPushButton("记录", card)
+        self.confirm_button.setObjectName("relationshipConfirmButton")
         actions.addWidget(self.dismiss_button)
         actions.addWidget(self.confirm_button)
         layout.addLayout(actions)
+
+    def move_to_parent_corner(self) -> None:
+        parent = self.parentWidget()
+        if parent is None:
+            return
+        self.adjustSize()
+        anchor = parent.frameGeometry()
+        self.move(anchor.right() - self.width() - 20, anchor.bottom() - self.height() - 20)
 
     def set_saving(self, saving: bool) -> None:
         self._saving = saving
         self.confirm_button.setEnabled(not saving)
         self.dismiss_button.setEnabled(not saving)
-        self.confirm_button.setText("正在记录..." if saving else "记下")
+        self.confirm_button.setText("记录中..." if saving else "记录")
         if saving:
             self.error_label.hide()
 
@@ -358,6 +424,9 @@ class RelationshipImprintDialog(QDialog):
 class ChatWindow(SettingsPanelMixin, QMainWindow):
     approval_requested = Signal(object)
     relationship_record_finished = Signal(object, object, str)
+    worker_reply_ready = Signal(object, str, str, object)
+    worker_error_ready = Signal(object, str)
+    worker_cleanup_ready = Signal(object)
 
     def __init__(self, runtime: FireflyRuntime, workspace: Path, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -400,6 +469,9 @@ class ChatWindow(SettingsPanelMixin, QMainWindow):
         self.setCentralWidget(self.build_ui())
         self.approval_requested.connect(self.handle_approval_request, Qt.QueuedConnection)
         self.relationship_record_finished.connect(self.handle_relationship_record_result, Qt.QueuedConnection)
+        self.worker_reply_ready.connect(self.handle_worker_reply, Qt.QueuedConnection)
+        self.worker_error_ready.connect(self.handle_worker_error, Qt.QueuedConnection)
+        self.worker_cleanup_ready.connect(self.handle_worker_cleanup, Qt.QueuedConnection)
         self.load_conversation(self.current_conversation_index)
         if self.companion_imprint_controller.enabled:
             QTimer.singleShot(0, self.start_companion_imprint_if_enabled)
@@ -995,6 +1067,7 @@ class ChatWindow(SettingsPanelMixin, QMainWindow):
             for message in self.messages
             if message.get("role") == "assistant_file"
         }
+        last_shown_time = ""
         for message in self.messages:
             role = message["role"]
             content = message["content"]
@@ -1003,10 +1076,16 @@ class ChatWindow(SettingsPanelMixin, QMainWindow):
             if role in {"file", "assistant_file"}:
                 widget = self.file_card_widget(content, is_user=role == "file")
             else:
+                timestamp = str(message.get("timestamp") or "")
+                show_time = role in {"user", "assistant"} and should_show_message_time(
+                    last_shown_time, timestamp
+                )
+                if show_time:
+                    last_shown_time = timestamp
                 widget = self.message_widget(
                     role,
                     content,
-                    timestamp=str(message.get("timestamp") or ""),
+                    timestamp=timestamp if show_time else "",
                     hidden_image_paths=rendered_assistant_files,
                 )
             self.chat_messages_layout.insertWidget(self.chat_messages_layout.count() - 1, widget)
@@ -1020,9 +1099,13 @@ class ChatWindow(SettingsPanelMixin, QMainWindow):
         timestamp: str = "",
         hidden_image_paths: set[Path] | None = None,
     ) -> QWidget:
-        row = QWidget(self.chat_messages_widget)
+        container = QWidget(self.chat_messages_widget)
+        container_layout = QVBoxLayout(container)
+        container_layout.setContentsMargins(0, 2, 0, 2)
+        container_layout.setSpacing(3)
+        row = QWidget(container)
         row_layout = QHBoxLayout(row)
-        row_layout.setContentsMargins(0, 2, 0, 2)
+        row_layout.setContentsMargins(0, 0, 0, 0)
         row_layout.setSpacing(8)
         if role == "status":
             label = QLabel(format_chat_text(text), row)
@@ -1033,7 +1116,15 @@ class ChatWindow(SettingsPanelMixin, QMainWindow):
             row_layout.addStretch(1)
             row_layout.addWidget(label, 0, Qt.AlignCenter)
             row_layout.addStretch(1)
-            return row
+            container_layout.addWidget(row)
+            return container
+
+        displayed_time = format_message_time(timestamp)
+        if displayed_time:
+            time_label = QLabel(displayed_time, container)
+            time_label.setObjectName("chatMessageTime")
+            time_label.setAlignment(Qt.AlignCenter)
+            container_layout.addWidget(time_label)
 
         is_user = role == "user"
         image_paths: list[Path] = []
@@ -1081,15 +1172,6 @@ class ChatWindow(SettingsPanelMixin, QMainWindow):
             if image is not None:
                 bubble_layout.addWidget(image, 0, Qt.AlignLeft)
 
-        displayed_time = format_message_time(timestamp)
-        if displayed_time:
-            time_label = QLabel(displayed_time, bubble)
-            time_label.setObjectName("chatBubbleTime")
-            time_label.setAttribute(Qt.WA_TranslucentBackground, True)
-            time_label.setAutoFillBackground(False)
-            time_label.setStyleSheet("background: transparent; border: 0;")
-            bubble_layout.addWidget(time_label, 0, Qt.AlignRight if is_user else Qt.AlignLeft)
-
         if is_user:
             row_layout.addStretch(1)
             row_layout.addWidget(bubble, 0, Qt.AlignRight | Qt.AlignTop)
@@ -1098,7 +1180,8 @@ class ChatWindow(SettingsPanelMixin, QMainWindow):
                 row_layout.addWidget(avatar, 0, Qt.AlignLeft | Qt.AlignBottom)
             row_layout.addWidget(bubble, 0, Qt.AlignLeft | Qt.AlignTop)
             row_layout.addStretch(1)
-        return row
+        container_layout.addWidget(row)
+        return container
 
     def image_preview_label(self, path: Path, parent: QWidget) -> QLabel | None:
         image = QLabel(parent)
@@ -1130,8 +1213,14 @@ class ChatWindow(SettingsPanelMixin, QMainWindow):
         if role == "status" and format_chat_text(content).startswith("本轮使用 Skill:"):
             return
         timestamp = message_timestamp()
+        displayed_timestamp = (
+            timestamp
+            if role in {"user", "assistant"}
+            and should_show_message_time(last_shown_message_time(self.messages), timestamp)
+            else ""
+        )
         self.messages.append({"role": role, "content": content, "timestamp": timestamp})
-        widget = self.message_widget(role, content, timestamp=timestamp)
+        widget = self.message_widget(role, content, timestamp=displayed_timestamp)
         self.chat_messages_layout.insertWidget(self.chat_messages_layout.count() - 1, widget)
         self.scroll_chat_to_bottom()
 
@@ -1398,7 +1487,7 @@ class ChatWindow(SettingsPanelMixin, QMainWindow):
         self.set_mood("thinking")
         thread = QThread(self)
         worker = ChatWorker(
-            self.runtime,
+            self.runtime.fork(),
             prompt_message,
             self.history,
             attachments,
@@ -1412,8 +1501,14 @@ class ChatWindow(SettingsPanelMixin, QMainWindow):
         self.worker_conversations[id(worker)] = (conversation_key, conversation)
         worker.moveToThread(thread)
         thread.started.connect(worker.run)
-        worker.finished.connect(self.handle_reply, Qt.QueuedConnection)
-        worker.failed.connect(self.handle_error, Qt.QueuedConnection)
+        worker.finished.connect(
+            lambda message, reply, skills, target=conversation: self.worker_reply_ready.emit(
+                target, message, reply, skills
+            )
+        )
+        worker.failed.connect(
+            lambda error, target=conversation: self.worker_error_ready.emit(target, error)
+        )
         worker.finished.connect(worker.deleteLater)
         worker.failed.connect(worker.deleteLater)
         worker.finished.connect(thread.quit)
@@ -1425,7 +1520,7 @@ class ChatWindow(SettingsPanelMixin, QMainWindow):
             worker.failed.connect(lambda _error, path=context_snapshot_path: remove_temporary_context_snapshot(path))
             thread.finished.connect(lambda path=context_snapshot_path: remove_temporary_context_snapshot(path))
         thread.finished.connect(thread.deleteLater)
-        thread.finished.connect(lambda key=conversation_key: self.cleanup_worker(key))
+        thread.finished.connect(lambda key=conversation_key: self.worker_cleanup_ready.emit(key))
         thread.start()
         self.sync_composer_state()
 
@@ -1449,9 +1544,17 @@ class ChatWindow(SettingsPanelMixin, QMainWindow):
         return True
 
     @Slot(str, str, object)
-    def handle_reply(self, message: str, reply: str, invoked_skills: object = None) -> None:
+    def handle_reply(
+        self,
+        message: str,
+        reply: str,
+        invoked_skills: object = None,
+        *,
+        conversation: dict[str, Any] | None = None,
+    ) -> None:
         proposal = invoked_skills.get("relationship_proposal") if isinstance(invoked_skills, dict) else None
-        _conversation_key, conversation = self.worker_conversation_context()
+        if conversation is None:
+            _conversation_key, conversation = self.worker_conversation_context()
         conversation_index = self.conversation_index_for_object(conversation)
         if conversation_index is None:
             return
@@ -1479,6 +1582,23 @@ class ChatWindow(SettingsPanelMixin, QMainWindow):
         if isinstance(proposal, dict):
             self.enqueue_relationship_proposal(proposal)
 
+    @Slot(object, str, str, object)
+    def handle_worker_reply(
+        self, conversation: object, message: str, reply: str, invoked_skills: object = None
+    ) -> None:
+        if isinstance(conversation, dict):
+            self.handle_reply(message, reply, invoked_skills, conversation=conversation)
+
+    @Slot(object, str)
+    def handle_worker_error(self, conversation: object, error: str) -> None:
+        if isinstance(conversation, dict):
+            self.handle_error(error, conversation=conversation)
+
+    @Slot(object)
+    def handle_worker_cleanup(self, conversation_key: object) -> None:
+        if isinstance(conversation_key, int):
+            self.cleanup_worker(conversation_key)
+
     def enqueue_relationship_proposal(self, proposal: dict[str, object]) -> None:
         kind = proposal.get("kind")
         summary = proposal.get("summary")
@@ -1498,13 +1618,14 @@ class ChatWindow(SettingsPanelMixin, QMainWindow):
         if not self.isVisible():
             self.show_and_raise()
         proposal = self._relationship_queue.pop(0)
-        dialog = RelationshipImprintDialog(proposal, self)
+        dialog = RelationshipImprintDialog(proposal, self, pending_count=len(self._relationship_queue) + 1)
         dialog.setStyleSheet(chat_style_for_mode(self.config.get("theme_mode")))
         dialog.dismiss_button.clicked.connect(lambda: self.finish_relationship_dialog(dialog))
         dialog.confirm_button.clicked.connect(lambda: self.record_relationship_proposal(dialog))
         dialog.finished.connect(lambda _result: self.relationship_dialog_closed(dialog))
         self._relationship_dialog = dialog
         dialog.show()
+        dialog.move_to_parent_corner()
         dialog.raise_()
         dialog.activateWindow()
 
@@ -1611,8 +1732,9 @@ class ChatWindow(SettingsPanelMixin, QMainWindow):
         self._sticker_worker = None
 
     @Slot(str)
-    def handle_error(self, error: str) -> None:
-        _conversation_key, conversation = self.worker_conversation_context()
+    def handle_error(self, error: str, *, conversation: dict[str, Any] | None = None) -> None:
+        if conversation is None:
+            _conversation_key, conversation = self.worker_conversation_context()
         if self.conversation_index_for_object(conversation) is None:
             return
         self.append_message_to_conversation(conversation, "assistant", f"请求失败：{error}")

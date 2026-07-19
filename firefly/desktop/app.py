@@ -20,7 +20,7 @@ from firefly.live2d.module import Live2DModule
 from firefly.workspace import initialize_workspace, load_config
 
 try:
-    from PySide6.QtCore import QObject, QThread, QTimer, Qt, Slot
+    from PySide6.QtCore import QLockFile, QObject, QThread, QTimer, Qt, Slot
     from PySide6.QtGui import QFont
     from PySide6.QtWidgets import QApplication, QMessageBox
 except ImportError as error:  # pragma: no cover - depends on local desktop env.
@@ -31,6 +31,11 @@ else:
 PACKAGE_ROOT = Path(__file__).resolve().parents[1]
 WEB_ROOT = PACKAGE_ROOT / "desktop" / "web"
 LIVE2D_ROOT = PACKAGE_ROOT / "assets" / "live2d"
+
+
+def acquire_desktop_lock(path: str | Path | None = None):
+    lock = QLockFile(str(path or Path(tempfile.gettempdir()) / "firefly-agent-desktop.lock"))
+    return lock if lock.tryLock(0) else None
 
 
 def write_firefly_watch_log(workspace: Path, event: str, **fields: object) -> None:
@@ -138,8 +143,8 @@ class LocalServer:
 
 
 def configure_desktop_runtime() -> None:
-    os.environ.setdefault("QTWEBENGINE_CHROMIUM_FLAGS", "--use-angle=swiftshader --enable-unsafe-swiftshader --disable-gpu-compositing --no-proxy-server")
-    os.environ.setdefault("QT_OPENGL", "software")
+    os.environ["QTWEBENGINE_CHROMIUM_FLAGS"] = "--no-proxy-server"
+    os.environ.pop("QT_OPENGL", None)
 
 
 def main(
@@ -177,6 +182,10 @@ def main(
     app = QApplication.instance() or QApplication(sys.argv)
     app.setApplicationName("Firefly Agent")
     app.setFont(QFont("Microsoft YaHei UI", 10))
+    instance_lock = acquire_desktop_lock()
+    if instance_lock is None:
+        QMessageBox.information(None, "Firefly Agent", "Firefly 已经在运行。")
+        return 0
     server = LocalServer()
     try:
         url = server.start()
